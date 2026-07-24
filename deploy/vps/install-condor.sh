@@ -79,8 +79,22 @@ fi
 msg "2/9. Ensuring condor user..."
 id -u "${CONDOR_USER}" >/dev/null 2>&1 || useradd -m -s /bin/bash -G docker "${CONDOR_USER}"
 
-# Make ownership of repo files condor-readable
-chown -R "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}"
+CONDOR_HOME="/home/${CONDOR_USER}"
+DEPLOY_DIR="${CONDOR_HOME}/condor"
+
+# Copy the deploy repo into the condor user's home if not already there
+if [ "${INSTALL_ROOT}" != "${DEPLOY_DIR}" ]; then
+    if [ ! -d "${DEPLOY_DIR}" ]; then
+        msg "  copying deploy repo to ${DEPLOY_DIR}..."
+        cp -a "${INSTALL_ROOT}" "${DEPLOY_DIR}"
+    fi
+fi
+
+# Make ownership of deploy dir condor-readable
+chown -R "${CONDOR_USER}:${CONDOR_USER}" "${DEPLOY_DIR}"
+
+# From here on, everything should reference DEPLOY_DIR (the condor user's copy)
+INSTALL_ROOT="${DEPLOY_DIR}"
 
 # Jump into ${SECRETS_FILE} — only root can read
 chown root:root "${SECRETS_FILE}" 2>/dev/null || true
@@ -88,9 +102,9 @@ chmod 600 "${SECRETS_FILE}"
 
 # ── 2a. Clone the subprojects (no submodules in this repo) ──────────────
 msg "2a/9. Cloning condor + hummingbot-api..."
-sudo -u "${CONDOR_USER}" HOME="/home/${CONDOR_USER}" bash <<CLONESUBCMD
+sudo -u "${CONDOR_USER}" HOME="${CONDOR_HOME}" bash <<CLONESUBCMD
 set -e
-cd "/home/${CONDOR_USER}/condor"
+cd "${DEPLOY_DIR}"
 [ -d "condor" ]    || git clone --depth 50 --branch deploy/pipeline-customizations https://github.com/NenengR/condor.git condor
 [ -d "hummingbot-api" ] || git clone --depth 50 https://github.com/hummingbot/hummingbot-api.git hummingbot-api
 CLONESUBCMD
@@ -198,7 +212,7 @@ BROKER_PASSWORD=\${BROKER_PASSWORD}
 DATABASE_URL=postgresql+asyncpg://hbot:hummingbot-api@localhost:5432/hummingbot_api
 GATEWAY_URL=http://localhost:15888
 GATEWAY_PASSPHRASE=\${HB_API_PASSWORD}
-BOTS_PATH=/home/${CONDOR_USER}/condor/hummingbot-api
+BOTS_PATH=${INSTALL_ROOT}/hummingbot-api
 TAILSCALE_ENABLED=true
 TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
 TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME}-hbot
