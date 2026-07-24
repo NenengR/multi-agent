@@ -7,7 +7,8 @@
 # own process; systemd does not manage individual agents.
 set -euo pipefail
 
-. /etc/condor/secrets.env
+# Env vars (ADMIN_USER_ID, WEB_PORT, etc.) are loaded by systemd's
+# EnvironmentFile directive — no need to source secrets.env here.
 
 BASE_URL="http://localhost:${WEB_PORT:-8088}/api/v1"
 
