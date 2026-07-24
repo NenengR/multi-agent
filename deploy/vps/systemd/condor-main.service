@@ -1,0 +1,39 @@
+[Unit]
+Description=Condor multi-agent trading pipeline (FastAPI + Telegram bot)
+Documentation=https://github.com/NenengR/condor
+After=network-online.target docker.service tailscaled.service hummingbot-api.service condor-infra.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=condor
+Group=condor
+WorkingDirectory=/home/condor/condor
+EnvironmentFile=/etc/condor/secrets.env
+
+# Bring in real .env, keep secrets env out of logs
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/condor/condor/.env
+
+ExecStartPre=/usr/bin/test -w /home/condor/condor/state
+ExecStart=/home/condor/.local/bin/uv run --directory /home/condor/condor python main.py
+
+Restart=on-failure
+RestartSec=10s
+
+# Hard memory cap: protect the box from OOM.
+# 12 GB box → allow up to 6 GB to condor. Trading agents + MCP servers can be hungry.
+# If you see MemoryMax=cgroup_kill in journal, adjust upward.
+MemoryMax=6G
+MemoryHigh=5G
+
+# Logs land in journald:
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=condor-main
+
+# Give the agent subprocesses a chance to die before kill
+TimeoutStopSec=120s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Bootstrap Condor pipeline agents (one-shot, after condor-main is healthy)
+After=condor-main.service
+Requires=condor-main.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=condor
+EnvironmentFile=/etc/condor/secrets.env
+ExecStart=/usr/local/bin/condor-bootstrap-pipeline.sh
+
+[Install]
+WantedBy=multi-user.target

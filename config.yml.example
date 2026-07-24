@@ -1,0 +1,34 @@
+# Server definitions consumed by both Condor and the Hummingbot client.
+# THIS IS AN EXAMPLE ONLY — replace before installing in production.
+servers:
+  local:
+    host: localhost
+    port: 8000
+    username: CHANGE_ME_USERNAME
+    password: CHANGE_ME_PASSWORD
+
+# Bot used by the bot father approach (single user setup). Find your ID at @userinfobot on Telegram.
+default_server: local
+admin_id: 0
+
+users:
+  0:
+    user_id: 0
+    role: admin
+    created_at: 0
+    notes: Replace user_id with your Telegram ID
+
+server_access:
+  local:
+    owner_id: 0
+    created_at: null
+    shared_with: {}
+
+chat_defaults:
+  "0": local
+
+# Long random secret (run: openssl rand -base64 32)
+# Rotate once per year. If leaked, force logout all web sessions.
+web_jwt_secret: REPLACE_WITH_openssl_rand_base64_32
+
+version: 1

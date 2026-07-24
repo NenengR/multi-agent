@@ -1,0 +1,70 @@
+# ── Build artefacts / virtualenvs ─────────
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / frontend ──────────────────────
+node_modules/
+.next/
+dist/
+.vite/
+
+# ── Secrets / configuration files ────────
+# Real .env files MUST never enter the repo
+.env
+.env.*
+!.env.example
+*.save
+*.save.*
+config.yml
+config.local.yml
+configs/local.yml
+
+# Hummingbot API keeps another .env + state
+hummingbot-api/.env
+hummingbot-api/bots/
+hummingbot-api/database/
+
+# SSL keys
+*.pem
+*.key
+*.crt
+
+# ── Trading / runtime state (regenerated locally) ──
+# State directory: positions, agent sessions, journals, signals
+condor/state/
+condor/data/
+condor/reports/
+condor/agents/_signals/
+condor/agents/*/sessions/
+# Archives of deleted strategies may contain trade logs
+condor/agents/*/strategies/_archive*/
+
+# Postgres / sqlite dumps
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ─────────────────────────────────
+logs/
+*.log
+
+# ── OS / IDE ────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Claude / agent artifacts ────────────
+.claude/
+
+# Subproject checkouts (live elsewhere on disk; install script clones them)
+/condor
+/hummingbot-api

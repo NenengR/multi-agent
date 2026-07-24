@@ -1,0 +1,15 @@
+[Unit]
+Description=Condor infrastructure (Postgres + EMQX broker + hummingbot-api)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Compose-managed stack: postgres (5432) + emqx (1883) run via /opt/condor/compose; hummingbot-api runs as a docker container too.
+ExecStart=/usr/bin/docker compose --file /opt/condor/compose/docker-compose.yml up -d
+ExecStop=/usr/bin/docker compose --file /opt/condor/compose/docker-compose.yml down
+ExecStartPost=/usr/local/bin/condor-start-hb-api.sh
+
+[Install]
+WantedBy=multi-user.target
