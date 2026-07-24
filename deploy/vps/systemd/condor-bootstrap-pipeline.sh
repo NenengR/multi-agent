@@ -23,8 +23,8 @@ for i in {1..60}; do
 done
 
 # Mint a JWT for /start endpoints (admin only)
-JWT=$(/home/condor/.local/bin/uv run --directory /home/condor/condor-deploy \
-    python -c "import sys; sys.path.insert(0, '/home/condor/condor-deploy'); from condor.web.auth import create_jwt; print(create_jwt(user_id=${ADMIN_USER_ID}, username='heliosneo', role='admin'))")
+JWT=$(/home/condor/.local/bin/uv run --directory /home/condor/condor-deploy/condor \
+    python -c "import sys; sys.path.insert(0, '/home/condor/condor-deploy/condor'); from condor.web.auth import create_jwt; print(create_jwt(user_id=${ADMIN_USER_ID}, username='heliosneo', role='admin'))")
 
 start_strategy() {
     local agent_slug="$1" strategy_slug="$2"
