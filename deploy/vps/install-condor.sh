@@ -50,8 +50,15 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     ca-certificates curl wget jq git unzip \
     python3 python3-venv python3-dev build-essential \
-    nodejs npm nginx-light \
+    nginx-light \
     ufw fail2ban unattended-upgrades
+
+# Node.js 22.x (Vite requires >=20.19)
+if ! node --version 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
+    msg "  installing Node.js 22.x..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+fi
 
 # uv (Python all-in-one toolchain)
 if ! command -v uv >/dev/null 2>&1; then
