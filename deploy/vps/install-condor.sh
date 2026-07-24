@@ -17,7 +17,9 @@
 set -euo pipefail
 
 # ── Paths & helpers ──────────────────────────────────────────────────────
-INSTALL_ROOT="${INSTALL_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+# INSTALL_ROOT is the directory of THIS script (the freshly-cloned condor repo).
+# I.e. the install script must live at <repo>/deploy/vps/install-condor.sh.
+INSTALL_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SECRETS_FILE="${SECRETS_FILE:-/etc/condor/secrets.env}"
 CONDOR_USER="${CONDOR_USER:-condor}"
 LOG_PREFIX="[install-condor]"
@@ -28,8 +30,8 @@ fail()  { echo "${LOG_PREFIX} ✗ $*" >&2; exit 1; }
 
 # ── Pre-flight checks ────────────────────────────────────────────────────
 [ "$EUID" -eq 0 ] || fail "Re-run with sudo:  sudo bash $0"
-[ -d "${INSTALL_ROOT}/condor" ] || fail "Run from repo root (no ./condor dir)"
-[ -f "${INSTALL_ROOT}/hummingbot-api" ] || [ -d "${INSTALL_ROOT}/hummingbot-api" ] || fail "hummingbot-api submodule missing"
+[ -d "${INSTALL_ROOT}/.git" ] || [ -d "${INSTALL_ROOT}/.git_bak" ] || [ -d "${INSTALL_ROOT}/install-condor.sh" ] || \
+    fail "Run from a fresh git clone (no .git in ${INSTALL_ROOT})."
 [ -f "${SECRETS_FILE}" ] || fail "Missing ${SECRETS_FILE}. Copy deploy/vps/env.example there first."
 
 # Sanity checks: secrets file must have at least one real key
@@ -39,6 +41,9 @@ grep -q '^HB_API_PASSWORD=[^[:space:]]' "${SECRETS_FILE}"  || fail "HB_API_PASSW
 
 msg "Install root:  ${INSTALL_ROOT}"
 msg "Secrets file:  ${SECRETS_FILE}"
+
+# Make ownership of repo files condor-readable
+chown -R "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}"
 
 # ── 1. APT packages ──────────────────────────────────────────────────────
 msg "1/9. Installing system packages..."
@@ -82,6 +87,15 @@ chown -R "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}"
 # Jump into ${SECRETS_FILE} — only root can read
 chown root:root "${SECRETS_FILE}" 2>/dev/null || true
 chmod 600 "${SECRETS_FILE}"
+
+# ── 2a. Clone the subprojects (no submodules in this repo) ──────────────
+msg "2a/9. Cloning condor + hummingbot-api..."
+sudo -u "${CONDOR_USER}" HOME="/home/${CONDOR_USER}" bash <<CLONESUBCMD
+set -e
+cd "/home/${CONDOR_USER}/condor"
+[ -d "condor" ]    || git clone --depth 50 https://github.com/hummingbot/condor.git       condor
+[ -d "hummingbot-api" ] || git clone --depth 50 https://github.com/hummingbot/hummingbot-api.git hummingbot-api
+CLONESUBCMD
 
 # ── 3. Tailscale ─────────────────────────────────────────────────────────
 msg "3/9. Tailscale mesh..."

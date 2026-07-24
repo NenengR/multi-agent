@@ -55,15 +55,18 @@ deploy/
 ```bash
 # On a fresh Ubuntu 22.04 VPS as a sudo user:
 sudo apt-get install -y git
-git clone https://github.com/NenengR/condor.git ~/condor
-cd ~/condor
-git submodule update --init --recursive
+git clone https://github.com/NenengR/condor.git ~/condor-deploy
+cd ~/condor-deploy
+# (This single repo is the deployment manifest. The subprojects — condor,
+#  hummingbot-api — are cloned automatically by install-condor.sh, not as
+#  submodules, so a shallow clone is sufficient.)
 cp deploy/vps/env.example /etc/condor/secrets.env
 sudo install -m 600 -o root -g root /dev/null /etc/condor/secrets.env  # touch only
 sudo bash -c "EDITOR=nano edit /etc/condor/secrets.env"  # fill TELEGRAM_TOKEN, *_API_KEY, etc.
 
-cp /home/$USER/condor/config.yml.example /home/$USER/condor/config.yml
-# Edit /home/$USER/condor/config.yml to set admin_id and web_jwt_secret (openssl rand -base64 32)
+cp ~/condor-deploy/config.yml.example /home/condor/condor/config.yml
+# (after the install script creates the condor user)
+# Edit /home/condor/condor/config.yml to set admin_id and web_jwt_secret (openssl rand -base64 32)
 
 sudo bash deploy/vps/install-condor.sh
 ```
@@ -101,15 +104,17 @@ curl -H "Authorization: Bearer $(/home/condor/.local/bin/uv run --directory /hom
 ## Update workflow
 
 ```bash
-cd ~/condor
-git pull --recurse-submodules
-git submodule update --init --recursive
+cd ~/condor-deploy
+git pull
+# Subprojects are pulled separately by operation (only on demand):
+(cd condor && git pull)
+(cd hummingbot-api && git pull)
 
 # Frontend updated? Rebuild:
-cd frontend && npm install --omit=dev && npm run build && cd ..
+(cd condor/frontend && npm install --omit=dev && npm run build)
 
 # Apply Python deps:
-uv sync
+(cd condor && uv sync)
 
 # Restart in dependency order:
 sudo systemctl restart condor-main
@@ -122,7 +127,7 @@ sudo /usr/local/bin/condor-restart-agents.sh
 sudo bash deploy/vps/uninstall-condor.sh
 # Removes:  systemd units, docker containers, /opt/condor/compose,
 #           hummingbot-api container, build artefacts.
-# Keeps:    ~/condor repo, ~/condor/state, jq-installed uv
+# Keeps:    ~/condor-deploy repo, ~/condor/state, uv install
 ```
 
 ## Failure modes
@@ -132,7 +137,7 @@ sudo bash deploy/vps/uninstall-condor.sh
 | `condor-main` OOM-killed | `journalctl -u condor-main \| grep cgroup_kill` | raise `MemoryMax=` if box has RAM; check for runaway TickEngine session |
 | Pipeline health shows `<slug>: stale` | `journalctl -u condor-main --since 30min` | `sudo /usr/local/bin/condor-restart-agents.sh` |
 | `Managed-by-port 8088` already bound | `ss -ltnp \| grep 8088` | stop conflicting service or change `WEB_PORT` |
-| `MODULE_NOT_FOUND hummingbot` | `uv sync` from `~/condor/condor` | re-run `uv pip install -e ../hummingbot-api` plus `uv sync` |
+| `MODULE_NOT_FOUND hummingbot` | `uv sync` from `~/condor-deploy/condor` | re-run `uv pip install -e ../hummingbot-api` plus `uv sync` |
 | `trading/orders` 500 | `./deploy/vps/systemd/condor-restart-agents.sh` then recheck | known intermittent in `hummingbot-api`; triage `docker logs hummingbot-api` |
 | Binance SSL fails (`CERTIFICATE_VERIFY_FAILED`) | `curl -I https://fapi.binance.com/api/v3/exchangeInfo` | check `/etc/hosts` is **clean** (no MITM entries) — VPS should not need overrides |
 
