@@ -15,8 +15,8 @@ pkill -9 -f "mcp_servers\\\\." 2>/dev/null || true
 sleep 2
 
 echo "[restart-agents] re-minting admin JWT..."
-JWT=$(/home/condor/.local/bin/uv run --directory /home/condor/condor \
-    python -c "import sys; sys.path.insert(0, '/home/condor/condor'); from condor.web.auth import create_jwt; print(create_jwt(user_id=${ADMIN_USER_ID}, username='heliosneo', role='admin'))")
+JWT=$(/home/condor/.local/bin/uv run --directory /home/condor/condor-deploy \
+    python -c "import sys; sys.path.insert(0, '/home/condor/condor-deploy'); from condor.web.auth import create_jwt; print(create_jwt(user_id=${ADMIN_USER_ID}, username='heliosneo', role='admin'))")
 
 # Stop (if running) and start each known strategy.
 AGENTS=(

@@ -8,15 +8,15 @@ Wants=network-online.target
 Type=simple
 User=condor
 Group=condor
-WorkingDirectory=/home/condor/condor
+WorkingDirectory=/home/condor/condor-deploy
 EnvironmentFile=/etc/condor/secrets.env
 
 # Bring in real .env, keep secrets env out of logs
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/home/condor/condor/.env
+EnvironmentFile=-/home/condor/condor-deploy/.env
 
-ExecStartPre=/usr/bin/test -w /home/condor/condor/state
-ExecStart=/home/condor/.local/bin/uv run --directory /home/condor/condor python main.py
+ExecStartPre=/usr/bin/test -w /home/condor/condor-deploy/state
+ExecStart=/home/condor/.local/bin/uv run --directory /home/condor/condor-deploy python main.py
 
 Restart=on-failure
 RestartSec=10s

@@ -7,7 +7,7 @@ if ! docker ps --format '{{.Names}}' | grep -q '^hummingbot-api$'; then
         --name hummingbot-api \
         --network host \
         --restart unless-stopped \
-        --env-file /home/condor/hummingbot-api/.env \
+        --env-file /home/condor/condor-deploy/hummingbot-api/.env \
         hummingbot-api-local
 fi
 echo "hummingbot-api reachable: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/ || echo fail)"

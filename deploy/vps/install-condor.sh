@@ -80,7 +80,7 @@ msg "2/9. Ensuring condor user..."
 id -u "${CONDOR_USER}" >/dev/null 2>&1 || useradd -m -s /bin/bash -G docker "${CONDOR_USER}"
 
 CONDOR_HOME="/home/${CONDOR_USER}"
-DEPLOY_DIR="${CONDOR_HOME}/condor"
+DEPLOY_DIR="${CONDOR_HOME}/condor-deploy"
 
 # Copy the deploy repo into the condor user's home if not already there
 if [ "${INSTALL_ROOT}" != "${DEPLOY_DIR}" ]; then
