@@ -186,7 +186,7 @@ sudo -u "${CONDOR_USER}" HOME="/home/${CONDOR_USER}" \
     bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh && . $HOME/.local/bin/env && uv sync'
 
 # Build frontend
-sudo -u "${CONDOR_USER}" bash -c "cd ${INSTALL_ROOT}/condor/frontend && npm install --omit=dev && npm run build"
+sudo -u "${CONDOR_USER}" bash -c "cd ${INSTALL_ROOT}/condor/frontend && npm install && npm run build"
 sudo rm -rf "${INSTALL_ROOT}/condor/frontend/node_modules"
 
 # ── 7. Generate hummingbot-api/.env (real one, not committed) ──────────
