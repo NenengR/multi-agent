@@ -10,9 +10,10 @@
 #
 # Required before this script runs:
 #   1. Clone the repo:  cd ~ && git clone https://github.com/NenengR/condor.git
-#   2. Copy template:   cp deploy/vps/env.example /etc/condor/secrets.env
-#   3. Edit secrets:    sudo nano /etc/condor/secrets.env   (fill all key fields)
-#   4. Run THIS script from the cloned repo root.
+#   2. Create dir:      sudo mkdir -p /etc/condor
+#   3. Copy template:   sudo cp deploy/vps/env.example /etc/condor/secrets.env
+#   4. Edit secrets:    sudo nano /etc/condor/secrets.env   (fill all key fields)
+#   5. Run THIS script from the cloned repo root.
 
 set -euo pipefail
 

@@ -36,7 +36,9 @@ See [`deploy/README.md`](deploy/README.md) for the full setup guide.
 git clone <this-repo> ~/condor-deploy && cd ~/condor-deploy
 
 # 2. Fill secrets
+sudo mkdir -p /etc/condor
 sudo cp deploy/vps/env.example /etc/condor/secrets.env
+sudo chmod 600 /etc/condor/secrets.env
 sudo nano /etc/condor/secrets.env
 
 # 3. Copy and edit config

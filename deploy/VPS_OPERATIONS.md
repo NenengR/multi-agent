@@ -163,7 +163,9 @@ sudo systemctl restart condor-main
 sudo apt-get install -y git
 git clone <repo-url> ~/condor-deploy
 cd ~/condor-deploy
+sudo mkdir -p /etc/condor
 sudo cp deploy/vps/env.example /etc/condor/secrets.env
+sudo chmod 600 /etc/condor/secrets.env
 sudo nano /etc/condor/secrets.env   # fill all fields
 sudo bash deploy/vps/install-condor.sh
 ```
