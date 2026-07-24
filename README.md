@@ -51,4 +51,4 @@ sudo bash deploy/vps/install-condor.sh
 
 - Ubuntu 22.04 LTS, 6 vCPU / 12 GB RAM / 200 GB SSD
 - Tailscale (inbound access — no public ports exposed)
-- Anthropic API key, Telegram bot token, Gate.io API credentials
+- Anthropic API key, Telegram bot token, exchange API credentials (Gate.io, Binance, etc.)

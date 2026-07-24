@@ -7,7 +7,7 @@ recovery agents) for self-hosted deployment on a VPS.
 
 - **Ubuntu 22.04 LTS** on a 6 vCPU / 12 GB RAM / 200 GB SSD VPS
 - Lean (no desktop), single non-root user with `sudo`
-- Outbound HTTPS to `api.hcnsec.cn` (LLM), `fapi.binance.com` (now reachable without DNS poison), `api.gate.io`, `api.telegram.org`, `api.tailscale.com`
+- Outbound HTTPS to `api.hcnsec.cn` (LLM), `fapi.binance.com` (Binance futures), `api.gate.io` (Gate.io), `api.telegram.org`, `api.tailscale.com`
 - Inbound: Tailscale only (no public ports)
 
 ## Topology

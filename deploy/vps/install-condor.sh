@@ -93,7 +93,7 @@ msg "2a/9. Cloning condor + hummingbot-api..."
 sudo -u "${CONDOR_USER}" HOME="/home/${CONDOR_USER}" bash <<CLONESUBCMD
 set -e
 cd "/home/${CONDOR_USER}/condor"
-[ -d "condor" ]    || git clone --depth 50 https://github.com/hummingbot/condor.git       condor
+[ -d "condor" ]    || git clone --depth 50 --branch deploy/pipeline-customizations https://github.com/NenengR/condor.git condor
 [ -d "hummingbot-api" ] || git clone --depth 50 https://github.com/hummingbot/hummingbot-api.git hummingbot-api
 CLONESUBCMD
 
