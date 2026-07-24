@@ -43,9 +43,6 @@ grep -q '^HB_API_PASSWORD=[^[:space:]]' "${SECRETS_FILE}"  || fail "HB_API_PASSW
 msg "Install root:  ${INSTALL_ROOT}"
 msg "Secrets file:  ${SECRETS_FILE}"
 
-# Make ownership of repo files condor-readable
-chown -R "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}"
-
 # ── 1. APT packages ──────────────────────────────────────────────────────
 msg "1/9. Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
