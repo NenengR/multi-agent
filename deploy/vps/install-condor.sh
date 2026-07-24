@@ -184,8 +184,6 @@ cd "${INSTALL_ROOT}/condor"
 # Install condor venv
 sudo -u "${CONDOR_USER}" HOME="/home/${CONDOR_USER}" \
     bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh && . $HOME/.local/bin/env && uv sync'
-sudo -u "${CONDOR_USER}" HOME="/home/${CONDOR_USER}" \
-    bash -c '. $HOME/.local/bin/env && uv pip install -e ../hummingbot-api'
 
 # Build frontend
 sudo -u "${CONDOR_USER}" bash <<'EOF'
