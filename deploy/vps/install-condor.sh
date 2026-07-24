@@ -140,6 +140,8 @@ ufw --force enable
 # ── 5. Postgres + EMQX broker via docker compose ─────────────────────────
 msg "5/9. Postgres + EMQX broker..."
 mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
+# EMQX runs as uid 1000 inside the container — fix ownership
+chown -R 1000:1000 /opt/condor/data/broker
 COMPOSE_DIR=/opt/condor/compose
 mkdir -p "${COMPOSE_DIR}"
 cat >"${COMPOSE_DIR}/docker-compose.yml" <<'EOFCOMPOSE'
@@ -223,12 +225,24 @@ chmod 600 "${HB_ENV}"
 
 # Build & run hummingbot-api docker image (managed by condor-infra.service ExecStartPost)
 cd "${INSTALL_ROOT}/hummingbot-api"
+
+# Create credentials directory (hummingbot-api expects it on startup)
+mkdir -p credentials/master_account/connectors
+chown -R "${CONDOR_USER}:${CONDOR_USER}" credentials/
+
 docker build -t hummingbot-api-local .
 # pre-create the container stopped; systemd brings it up
 docker run -d --name hummingbot-api \
     --network host \
     --restart unless-stopped \
     --env-file "${HB_ENV}" \
+    -v "${INSTALL_ROOT}/hummingbot-api/credentials:/hummingbot-api/credentials" \
+    -v "${INSTALL_ROOT}/hummingbot-api/bots:/hummingbot-api/bots" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /proc:/host/proc:ro \
+    -v /etc/hostname:/host/disk-probe:ro \
+    -e HOST_PROC=/host/proc \
+    -e HOST_DISK_PATH=/host/disk-probe \
     hummingbot-api-local || true
 
 # ── 8. condor config.yml (real, not committed) ─────────────────────────
@@ -291,6 +305,10 @@ chmod 600 "${CONDOR_CFG}"
 } > "${INSTALL_ROOT}/condor/.env"
 chown "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}/condor/.env"
 chmod 600 "${INSTALL_ROOT}/condor/.env"
+
+# Create runtime directories condor-main expects
+mkdir -p "${INSTALL_ROOT}/condor/state" "${INSTALL_ROOT}/condor/agents/_signals/active"
+chown -R "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}/condor/state" "${INSTALL_ROOT}/condor/agents/_signals"
 
 # ── 9. systemd units ────────────────────────────────────────────────────
 msg "9/9. systemd service units..."
