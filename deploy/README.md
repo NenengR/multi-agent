@@ -62,7 +62,7 @@ cd ~/condor-deploy
 #  submodules, so a shallow clone is sufficient.)
 cp deploy/vps/env.example /etc/condor/secrets.env
 sudo install -m 600 -o root -g root /dev/null /etc/condor/secrets.env  # touch only
-sudo bash -c "EDITOR=nano edit /etc/condor/secrets.env"  # fill TELEGRAM_TOKEN, *_API_KEY, etc.
+sudo bash -c "EDITOR=nano edit /etc/condor/secrets.env"  # fill TELEGRAM_TOKEN, *_API_KEY, HCNSEC keys, etc.
 
 cp ~/condor-deploy/config.yml.example /home/condor/condor/config.yml
 # (after the install script creates the condor user)
@@ -140,6 +140,8 @@ sudo bash deploy/vps/uninstall-condor.sh
 | `MODULE_NOT_FOUND hummingbot` | `uv sync` from `~/condor-deploy/condor` | re-run `uv pip install -e ../hummingbot-api` plus `uv sync` |
 | `trading/orders` 500 | `./deploy/vps/systemd/condor-restart-agents.sh` then recheck | known intermittent in `hummingbot-api`; triage `docker logs hummingbot-api` |
 | Binance SSL fails (`CERTIFICATE_VERIFY_FAILED`) | `curl -I https://fapi.binance.com/api/v3/exchangeInfo` | check `/etc/hosts` is **clean** (no MITM entries) — VPS should not need overrides |
+| Agent ticks show "unknown" / no `meta.yaml` written | check `ANTHROPIC_API_KEY_HCNSEC` + `ANTHROPIC_BASE_URL_HCNSEC` in `/etc/condor/secrets.env` | agents use `claude-code:hcnsec`; empty keys → keyless subprocess that never writes health |
+| `uv: command not found` in journal | `which uv` as condor user | ensure `PATH` includes `/home/condor/.local/bin` — systemd unit sets it via `Environment=PATH=...` |
 
 ## Notes
 

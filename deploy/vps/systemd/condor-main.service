@@ -13,6 +13,7 @@ EnvironmentFile=/etc/condor/secrets.env
 
 # Bring in real .env, keep secrets env out of logs
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/condor/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=-/home/condor/condor-deploy/condor/.env
 
 ExecStartPre=/usr/bin/test -w /home/condor/condor-deploy/condor/state

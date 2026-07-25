@@ -40,6 +40,14 @@ grep -q '^TELEGRAM_TOKEN=[^[:space:]]' "${SECRETS_FILE}" || fail "TELEGRAM_TOKEN
 grep -q '^ANTHROPIC_API_KEY=[^[:space:]]' "${SECRETS_FILE}" || fail "ANTHROPIC_API_KEY is empty"
 grep -q '^HB_API_PASSWORD=[^[:space:]]' "${SECRETS_FILE}"  || fail "HB_API_PASSWORD is empty"
 
+# Agents use agent_key: claude-code:hcnsec — the ACP bridge resolves credentials
+# from these suffixed vars only. Empty values spawn a keyless subprocess whose
+# ticks fail without ever writing meta.yaml (pipeline health shows "unknown").
+grep -q '^ANTHROPIC_API_KEY_HCNSEC=[^[:space:]]' "${SECRETS_FILE}" \
+    || fail "ANTHROPIC_API_KEY_HCNSEC is empty — agents use claude-code:hcnsec and will not tick"
+grep -q '^ANTHROPIC_BASE_URL_HCNSEC=[^[:space:]]' "${SECRETS_FILE}" \
+    || fail "ANTHROPIC_BASE_URL_HCNSEC is empty — agents use claude-code:hcnsec and will not tick"
+
 msg "Install root:  ${INSTALL_ROOT}"
 msg "Secrets file:  ${SECRETS_FILE}"
 
@@ -58,6 +66,12 @@ if ! node --version 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
     msg "  installing Node.js 22.x..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
+fi
+
+# claude-agent-acp (ACP bridge for tick engine)
+if ! command -v claude-agent-acp >/dev/null 2>&1; then
+    msg "  installing @agentclientprotocol/claude-agent-acp..."
+    npm install -g @agentclientprotocol/claude-agent-acp
 fi
 
 # uv (Python all-in-one toolchain)
@@ -302,6 +316,10 @@ chmod 600 "${CONDOR_CFG}"
             echo "ANTHROPIC_API_KEY_AGENTROUTER_${i}_NOTE=${note}"
         fi
     done
+    # HCNSEC provider (used by agent_key: claude-code:hcnsec)
+    [ -n "${ANTHROPIC_API_KEY_HCNSEC:-}" ]  && echo "ANTHROPIC_API_KEY_HCNSEC=${ANTHROPIC_API_KEY_HCNSEC}"
+    [ -n "${ANTHROPIC_BASE_URL_HCNSEC:-}" ] && echo "ANTHROPIC_BASE_URL_HCNSEC=${ANTHROPIC_BASE_URL_HCNSEC}"
+    [ -n "${ANTHROPIC_MODEL_HCNSEC:-}" ]    && echo "ANTHROPIC_MODEL_HCNSEC=${ANTHROPIC_MODEL_HCNSEC}"
 } > "${INSTALL_ROOT}/condor/.env"
 chown "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}/condor/.env"
 chmod 600 "${INSTALL_ROOT}/condor/.env"

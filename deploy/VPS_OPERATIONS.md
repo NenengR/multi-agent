@@ -75,6 +75,10 @@ sudo nano /etc/condor/secrets.env   # edit key(s)
 sudo systemctl restart condor-main  # picks up new env
 ```
 
+Required secrets for agent ticks:
+- `ANTHROPIC_API_KEY_HCNSEC` — agents use `agent_key: claude-code:hcnsec`; empty = agents never tick
+- `ANTHROPIC_BASE_URL_HCNSEC` — ACP bridge endpoint for the hcnsec provider
+
 JWT secret (web dashboard sessions) lives in `condor/config.yml`:
 ```bash
 sudo -u condor nano ~/condor-deploy/condor/config.yml  # update web_jwt_secret
@@ -153,6 +157,16 @@ pkill -f "claude-agent-acp" || true
 pkill -f "mcp_server"       || true
 sudo systemctl restart condor-main
 ```
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Agent ticks show "unknown" / no `meta.yaml` | `ANTHROPIC_API_KEY_HCNSEC` or `ANTHROPIC_BASE_URL_HCNSEC` empty | Fill both in `/etc/condor/secrets.env`, restart condor-main |
+| `uv: command not found` in journal | `PATH` missing `/home/condor/.local/bin` | Ensure `condor-main.service` has `Environment=PATH=/home/condor/.local/bin:...` |
+| `claude-agent-acp: command not found` | npm global package not installed | `npm install -g @agentclientprotocol/claude-agent-acp` as root |
 
 ---
 
