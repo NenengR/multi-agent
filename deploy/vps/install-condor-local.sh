@@ -104,6 +104,21 @@
 #     (Compose rewrite) and step 7 (reinstall of condor-start-hb-api.sh
 #     with the GET / check), which is what Garing asked to be sure of.
 #
+# Fase 1.8, 13 Nov 2026. Built after Garing's 06:10 WIB preflight of 06c71c5:
+#   - Stale deploy copy: the copy block only copied the repo into
+#     DEPLOY_DIR when it did not exist yet. On rerun the old copy
+#     (Fase 1.4, 1759fdb) stayed in place, INSTALL_ROOT was reassigned
+#     to it, and step 7 installed stale units and scripts, including
+#     the old /health-checking startup script. Fix: when DEPLOY_DIR
+#     already exists, refresh ONLY deploy/ from the fresh clone
+#     (cp -a deploy/.). The subproject checkouts with their local
+#     loopback patches, and all generated configs, are left untouched.
+#     The installer now also prints the commit its files came from.
+#   - Proof of install: after installing condor-start-hb-api.sh,
+#     step 7 greps the installed file and FAILS the install if it
+#     still checks /health or does not check GET /. A claim of
+#     "installed" is now verified, not assumed.
+#
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
@@ -256,7 +271,20 @@ if [ "${INSTALL_ROOT}" != "${DEPLOY_DIR}" ]; then
     if [ ! -d "${DEPLOY_DIR}" ]; then
         msg "  copying deploy repo to ${DEPLOY_DIR}..."
         cp -a "${INSTALL_ROOT}" "${DEPLOY_DIR}"
+    else
+        # Fase 1.8: an existing DEPLOY_DIR was copied from an OLD commit
+        # (Fase 1.4, 1759fdb) and the old copy was then used as the
+        # install source, so step 7 installed stale units and scripts.
+        # Refresh ONLY the installer's own files from the fresh clone.
+        # The subproject checkouts (condor, hummingbot-api) with their
+        # local loopback patches, and all generated configs, are left
+        # untouched on purpose.
+        msg "  refreshing installer files in existing ${DEPLOY_DIR} from ${INSTALL_ROOT}..."
+        mkdir -p "${DEPLOY_DIR}/deploy"
+        cp -a "${INSTALL_ROOT}/deploy/." "${DEPLOY_DIR}/deploy/"
+        msg "  subproject checkouts and generated configs left untouched"
     fi
+    msg "  installer files from commit $(git -C "${INSTALL_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 fi
 chown -R "${CONDOR_USER}:${CONDOR_USER}" "${DEPLOY_DIR}"
 INSTALL_ROOT="${DEPLOY_DIR}"
@@ -489,6 +517,12 @@ install -m 0755 "${INSTALL_ROOT}/deploy/vps/systemd/condor-restart-agents.sh" \
     /usr/local/bin/condor-restart-agents.sh
 install -m 0755 "${INSTALL_ROOT}/deploy/vps/systemd/condor-start-hb-api.sh" \
     /usr/local/bin/condor-start-hb-api.sh
+# Fase 1.8: prove the installed startup script is the new one. The old
+# script checked /health and failed condor-infra; the new one checks
+# GET /. Fail the install if the old check is still in the file.
+grep -q '8000/health' /usr/local/bin/condor-start-hb-api.sh && fail "installed condor-start-hb-api.sh still checks /health, the deploy refresh did not apply" || true
+grep -qF 'http://localhost:8000/ ||' /usr/local/bin/condor-start-hb-api.sh || fail "installed condor-start-hb-api.sh does not check GET /, the deploy refresh did not apply"
+msg "  installed condor-start-hb-api.sh checks GET / (verified)"
 
 systemctl daemon-reload
 systemctl enable --now condor-infra condor-web
