@@ -45,6 +45,18 @@
 #     the Condor API and infra are unaffected. Strategies are still
 #     never started, bootstrap stays disabled.
 #
+# Fase 1.4, 13 Nov 2026. Built after Garing's 04:19 and 04:22 WIB audits:
+#   - Compose file permissions: docker-compose.yml holds database
+#     passwords and would be created mode 0644 under root umask 0022.
+#     Fix: umask 077 at the top of this script, explicit chmod 600 on
+#     the compose file, and a final audit that fails if any credential
+#     file (local-secrets, compose, hummingbot-api .env, condor
+#     config.yml, condor .env) is not mode 600.
+#   - nginx-light: removed from the apt list. It is unused by Condor
+#     and its install enables nginx.service with a default site on
+#     0.0.0.0:80. Final checks now fail if nginx is enabled or active,
+#     and the ss bind check also covers port 80.
+#
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
@@ -67,6 +79,13 @@
 #   6. Run THIS script from the cloned repo root.
 
 set -euo pipefail
+
+# Fase 1.4: every file this script creates defaults to owner-only access.
+# Garing found 13 Nov 2026 that docker-compose.yml would otherwise be
+# created mode 0644 with database passwords inside, readable by all local
+# users. umask 077 here, plus explicit chmod 600 on every file that holds
+# a credential, closes that hole.
+umask 077
 
 INSTALL_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SECRETS_FILE="${SECRETS_FILE:-/etc/condor/secrets.env}"
@@ -152,8 +171,10 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     ca-certificates curl wget jq git unzip \
     python3 python3-venv python3-dev build-essential \
-    nginx-light \
     fail2ban unattended-upgrades
+# No nginx-light: it is unused by Condor, and installing it enables
+# nginx.service with a default site on 0.0.0.0:80. This install is
+# local-only; Condor web already binds 127.0.0.1:8088.
 
 if ! node --version 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
     msg "  installing Node.js 22.x..."
@@ -261,6 +282,8 @@ services:
       - "127.0.0.1:18083:18083"
     restart: unless-stopped
 EOFCOMPOSE
+# This file holds database passwords, so it must be owner-only.
+chmod 600 "${COMPOSE_DIR}/docker-compose.yml"
 
 cd "${COMPOSE_DIR}"
 docker compose up -d
@@ -408,15 +431,31 @@ WEB_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8088/ 2>/dev
 msg "condor web API on 127.0.0.1:8088 returned HTTP ${WEB_CODE} (any HTTP code here means the server is up; auth-gated routes may return 401 or 404)"
 systemctl is-enabled condor-bootstrap-pipeline 2>/dev/null | grep -q disabled && msg "bootstrap pipeline is disabled, as required" || warn "bootstrap pipeline is NOT disabled, check it before continuing"
 curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1 && msg "hummingbot-api /health: 200" || warn "hummingbot-api /health did not return 200 yet, check condor-start-hb-api.sh and report"
-# Bind check: no service may listen on 0.0.0.0. Report every public listener.
+# Credential file audit: no file holding a password may be group- or
+# other-readable. Check every runtime file the installer wrote.
+for _f in "${LOCAL_SECRETS_FILE}" "${COMPOSE_DIR}/docker-compose.yml" "${HB_ENV}" "${CONDOR_CFG}" "${INSTALL_ROOT}/condor/.env"; do
+    [ -f "${_f}" ] || fail "expected credential file missing: ${_f}"
+    _mode="$(stat -c %a "${_f}")"
+    [ "${_mode}" = "600" ] || fail "credential file ${_f} has mode ${_mode}, expected 600"
+done
+msg "all credential files are mode 600: local-secrets, compose, hummingbot-api .env, condor config.yml, condor .env"
+# Bind check: no service may listen on 0.0.0.0, and port 80 must stay closed.
 if command -v ss >/dev/null 2>&1; then
-    PUBLIC_BINDS="$(ss -ltn 2>/dev/null | grep -E '0.0.0.0:(8000|8088|5432|1883|18083|8083)\b' || true)"
+    PUBLIC_BINDS="$(ss -ltn 2>/dev/null | grep -E '0.0.0.0:(80|8000|8088|5432|1883|18083|8083)\b' || true)"
     if [ -n "${PUBLIC_BINDS}" ]; then
         echo "${PUBLIC_BINDS}" >&2
         fail "public bind found on 0.0.0.0, stop every service and report this"
     fi
-    msg "no service listens on 0.0.0.0 for ports 8000, 8088, 5432, 1883, 18083, 8083"
+    msg "no service listens on 0.0.0.0 for ports 80, 8000, 8088, 5432, 1883, 18083, 8083"
 fi
+# Nginx must not be running or enabled by this install.
+if systemctl is-enabled nginx 2>/dev/null | grep -q enabled; then
+    fail "nginx.service is enabled, this local-only install must not enable it"
+fi
+if systemctl is-active nginx 2>/dev/null | grep -q active; then
+    fail "nginx.service is active, this local-only install must not start it"
+fi
+msg "nginx is not enabled or active"
 
 # ── Final ───────────────────────────────────────────────────────────────
 msg ""

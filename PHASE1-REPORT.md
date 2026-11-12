@@ -117,6 +117,15 @@ Dua blocker Phase 1.2 yang dilaporkan Garing jam 03:51 WIB, keduanya dijawab di 
 1. Secrets file: installer lama menambahkan delapan password lokal ke /etc/condor/secrets.env, padahal Pakle hanya mengizinkan tiga nilai. Perbaikan: password lokal dibuat di file terpisah /etc/condor/local-secrets.env (chmod 600), dan installer GAGAL kalau file kanonis tidak berisi tepat tiga nilai (PAPER_MODE=true, LIVE_TRADING_CONFIRMED=no, CONDOR_ADMIN_USERNAME=admin) atau mengandung kunci credential apa pun. Tidak perlu SECRETS_FILE override, jalankan installer seperti biasa, file kanonis tidak pernah ditulis.
 2. Telegram: main.py selalu membangun Telegram Application dengan TELEGRAM_TOKEN, jadi condor-main tidak bisa start tanpa token asli. Perbaikan, terverifikasi dari kode Condor: instalasi lokal TIDAK menjalankan main.py sama sekali, melainkan hanya FastAPI web app (condor.web.app:create_app) lewat unit baru condor-web.service, bind 127.0.0.1:8088. create_app tidak butuh Telegram token, dan condor/web/auth.py menandatangani JWT web dari WEB_JWT_SECRET atau secret acak di config.yml, bukan dari TELEGRAM_TOKEN. Bot Telegram nonaktif di mode ini, API dan infra Condor tidak terpengaruh, strategi tetap tidak pernah di-start, bootstrap tetap disabled.
 
+## 13. Fase 1.4, izin file credential dan hapus nginx, 13 Nov 2026 04:56 WIB
+
+Garing mengaudit lagi jam 04:19 dan 04:22 WIB dan TIDAK menjalankan installer, dengan dua temuan yang benar:
+1. docker-compose.yml berisi POSTGRES_PASSWORD dan EMQX_DASHBOARD_PASSWORD, dan dengan root umask 0022 file baru akan bermode 0644, terbaca semua pengguna lokal. Installer juga menyalin kredensial ke konfigurasi runtime lain.
+2. Installer memasang nginx-light, yang belum ada di host. Paket itu meng-enable nginx.service dan memasang default site di 0.0.0.0:80 dan [::]:80. Setup yang disetujui adalah local-only, Condor web sudah loopback 127.0.0.1:8088.
+Perbaikan di install-condor-local.sh:
+- umask 077 di awal script, chmod 600 eksplisit pada docker-compose.yml, dan audit akhir yang gagal kalau salah satu file credential (local-secrets, compose, hummingbot-api .env, condor config.yml, condor .env) tidak bermode 600.
+- nginx-light dihapus dari daftar apt, karena tidak dipakai Condor. Cek akhir gagal kalau nginx enabled atau active, dan cek bind ss juga mencakup port 80.
+
 ## 9. Keputusan master 12:35 WIB 12 Nov 2026
 
 Master setuju paket konservatif, dan minta cek diff dulu di chat sebelum push.
