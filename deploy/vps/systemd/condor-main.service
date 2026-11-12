@@ -1,7 +1,8 @@
 [Unit]
 Description=Condor multi-agent trading pipeline (FastAPI + Telegram bot)
 Documentation=https://github.com/NenengR/condor
-After=network-online.target docker.service tailscaled.service hummingbot-api.service condor-infra.service
+After=network-online.target docker.service tailscaled.service condor-infra.service
+Wants=condor-infra.service
 Wants=network-online.target
 
 [Service]

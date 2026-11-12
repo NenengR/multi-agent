@@ -33,7 +33,7 @@ See [`deploy/README.md`](deploy/README.md) for the full setup guide.
 
 ```bash
 # 1. Clone this repo on a fresh Ubuntu 22.04 VPS
-git clone <this-repo> ~/condor-deploy && cd ~/condor-deploy
+git clone https://github.com/NenengR/multi-agent ~/condor-deploy && cd ~/condor-deploy
 
 # 2. Fill secrets
 sudo mkdir -p /etc/condor
@@ -42,8 +42,8 @@ sudo chmod 600 /etc/condor/secrets.env
 sudo nano /etc/condor/secrets.env
 
 # 3. Copy and edit config
-cp config.yml.example config.yml
-nano config.yml   # set hummingbot API credentials, Telegram admin_id, JWT secret
+cp config.yml.example /home/condor/condor-deploy/condor/config.yml
+nano /home/condor/condor-deploy/condor/config.yml   # set hummingbot API credentials, Telegram admin_id, JWT secret (after install creates the condor user)
 
 # 4. Run installer (idempotent)
 sudo bash deploy/vps/install-condor.sh

@@ -18,4 +18,6 @@ if ! docker ps --format '{{.Names}}' | grep -q '^hummingbot-api$'; then
         -e HOST_DISK_PATH=/host/disk-probe \
         hummingbot-api-local
 fi
-echo "hummingbot-api reachable: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/ || echo fail)"
+code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/health || echo fail)"
+echo "hummingbot-api health: ${code}"
+[ "${code}" = "200" ] || { echo "hummingbot-api /health is not 200, check docker logs hummingbot-api" >&2; exit 1; }
