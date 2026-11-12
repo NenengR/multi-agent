@@ -14,20 +14,26 @@
 #     stored only in /etc/condor/secrets.env (chmod 600). They are never
 #     printed, emailed, or committed. No exchange API key or secret is
 #     ever read or written by this script.
-#   - Model route is Apinex OpenAI-compatible, not HCNSEC:
-#     AGENT_KEY=openai:free/deepseek-v4.1-flash,
-#     MODEL_BASE_URL=https://api.apinex.bond/v1.
+#   - Model route is HCNSEC OpenAI-compatible, chosen by Pakle 13 Nov 2026:
+#     AGENT_KEY=openai:MiniMax-M3.1-Flash,
+#     MODEL_BASE_URL=https://api.hcnsec.cn/v1.
 #     OPENAI_API_KEY is left empty here; it is supplied later through a
 #     secure route, never by email, before the first dry-run tick.
+#   - Loopback binds: after cloning, Condor main.py is patched from
+#     host 0.0.0.0 to 127.0.0.1, and the Hummingbot API Dockerfile
+#     ENTRYPOINT is patched from --host 0.0.0.0 to --host 127.0.0.1.
+#     The script verifies both patches and checks with ss that no
+#     service listens on 0.0.0.0 afterwards.
 #
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
 # Required before this script runs:
-#   1. Clone the repo branch phase1-paper-gate and verify HEAD:
+#   1. Clone the repo branch phase1-paper-gate and pull the latest commit:
 #        git clone --branch phase1-paper-gate https://github.com/devnfix-cyber/multi-agent
-#        cd multi-agent && git rev-parse HEAD
-#        (must be 61592817738cad6fb743b03dd43c5a2602f00c1f)
+#        cd multi-agent && git pull origin phase1-paper-gate && git rev-parse HEAD
+#      Record the HEAD you pulled and report it; do not trust a commit
+#      hash printed in this header, it goes stale on every new commit.
 #   2. Create dir:      sudo mkdir -p /etc/condor
 #   3. Copy template:   sudo cp deploy/vps/env.example /etc/condor/secrets.env
 #   4. Set the three non-trading values in it (no secrets needed):
@@ -167,6 +173,21 @@ cd "${DEPLOY_DIR}"
 (cd hummingbot-api && git checkout "${HUMMINGBOT_API_COMMIT}" && [ "\$(git rev-parse HEAD)" = "${HUMMINGBOT_API_COMMIT}" ]) || { echo "hummingbot-api HEAD does not match pinned HUMMINGBOT_API_COMMIT" >&2; exit 1; }
 CLONESUBCMD
 
+# ── 2b. Loopback binds: patch 0.0.0.0 to 127.0.0.1, then verify ─────────
+msg "2b/8. Patching listeners to loopback (127.0.0.1)..."
+# Condor main.py _run_dual runs Uvicorn on 0.0.0.0 (line 719 at pinned commit).
+grep -q 'host="0.0.0.0"' "${DEPLOY_DIR}/condor/main.py" || fail "Condor main.py does not contain the expected 0.0.0.0 bind, do not guess a different patch, report this"
+sed -i 's/host="0.0.0.0"/host="127.0.0.1"/' "${DEPLOY_DIR}/condor/main.py"
+grep -q 'host="127.0.0.1"' "${DEPLOY_DIR}/condor/main.py" || fail "Condor main.py loopback patch did not apply"
+grep -q 'host="0.0.0.0"' "${DEPLOY_DIR}/condor/main.py" && fail "Condor main.py still contains 0.0.0.0 after patch" || true
+# Hummingbot API Dockerfile ENTRYPOINT runs Uvicorn on 0.0.0.0:8000.
+# The line is JSON form: "--host", "0.0.0.0", so match the quoted address.
+grep -qF '"0.0.0.0"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" || fail "Hummingbot API Dockerfile does not contain the expected 0.0.0.0 bind, do not guess a different patch, report this"
+sed -i 's/"0.0.0.0"/"127.0.0.1"/' "${DEPLOY_DIR}/hummingbot-api/Dockerfile"
+grep -qF '"127.0.0.1"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" || fail "Hummingbot API Dockerfile loopback patch did not apply"
+grep -qF '"0.0.0.0"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" && fail "Hummingbot API Dockerfile still contains 0.0.0.0 after patch" || true
+msg "  both listeners patched to 127.0.0.1 and verified"
+
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
 mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
@@ -237,6 +258,7 @@ GATEWAY_URL=https://localhost:15888
 GATEWAY_PASSPHRASE=${GATEWAY_PASSPHRASE}
 BOTS_PATH=${INSTALL_ROOT}/hummingbot-api
 TAILSCALE_ENABLED=false
+API_BIND=127.0.0.1
 EOF
 chown "${CONDOR_USER}:${CONDOR_USER}" "${HB_ENV}"
 chmod 600 "${HB_ENV}"
@@ -304,8 +326,8 @@ chmod 600 "${CONDOR_CFG}"
     echo "PAPER_MODE=true"
     echo "LIVE_TRADING_CONFIRMED=no"
     echo "CONDOR_ADMIN_USERNAME=${CONDOR_ADMIN_USERNAME:-admin}"
-    echo "AGENT_KEY=openai:free/deepseek-v4.1-flash"
-    echo "MODEL_BASE_URL=https://api.apinex.bond/v1"
+    echo "AGENT_KEY=openai:MiniMax-M3.1-Flash"
+    echo "MODEL_BASE_URL=https://api.hcnsec.cn/v1"
     echo "OPENAI_API_KEY="
 } > "${INSTALL_ROOT}/condor/.env"
 chown "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}/condor/.env"
@@ -345,6 +367,15 @@ docker compose -f "${COMPOSE_DIR}/docker-compose.yml" ps || warn "could not list
 systemctl is-active condor-infra condor-main || warn "condor-infra or condor-main is not active, check systemctl status"
 systemctl is-enabled condor-bootstrap-pipeline 2>/dev/null | grep -q disabled && msg "bootstrap pipeline is disabled, as required" || warn "bootstrap pipeline is NOT disabled, check it before continuing"
 curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1 && msg "hummingbot-api /health: 200" || warn "hummingbot-api /health did not return 200 yet, check condor-start-hb-api.sh and report"
+# Bind check: no service may listen on 0.0.0.0. Report every public listener.
+if command -v ss >/dev/null 2>&1; then
+    PUBLIC_BINDS="$(ss -ltn 2>/dev/null | grep -E '0.0.0.0:(8000|8088|5432|1883|18083|8083)\b' || true)"
+    if [ -n "${PUBLIC_BINDS}" ]; then
+        echo "${PUBLIC_BINDS}" >&2
+        fail "public bind found on 0.0.0.0, stop every service and report this"
+    fi
+    msg "no service listens on 0.0.0.0 for ports 8000, 8088, 5432, 1883, 18083, 8083"
+fi
 
 # ── Final ───────────────────────────────────────────────────────────────
 msg ""

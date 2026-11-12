@@ -98,6 +98,18 @@ Isinya:
 - Systemd: hanya enable dan start condor-infra dan condor-main. condor-bootstrap-pipeline di-install tapi di-disable dan di-stop, tidak ada strategi yang jalan, tidak ada executor, tidak ada order.
 - Verifikasi akhir hanya /health dan status systemd, lalu laporkan ke HAMID.
 
+## 11. Fase 1.2, bind loopback dan model HCNSEC, 13 Nov 2026 00:15 WIB
+
+Garing memeriksa lagi jam 22:53 WIB dan TIDAK menjalankan installer lokal, dengan alasan yang benar: Condor main.py menjalankan Uvicorn di 0.0.0.0 (baris 719), Dockerfile Hummingbot API menjalankan Uvicorn di 0.0.0.0:8000 (baris 56), dan Sandbox tidak punya UFW, jadi service tidak bisa dijaga local-only. Header installer lama masih menyebut commit lama 615928. Docker unit masih inactive.
+Perbaikan di install-condor-local.sh, terverifikasi di file asli hasil clone:
+- Setelah clone, main.py di-patch host="0.0.0.0" jadi host="127.0.0.1", diverifikasi grep sebelum dan sesudah.
+- Dockerfile di-patch "0.0.0.0" jadi "127.0.0.1" (bentuk JSON "--host", "0.0.0.0"), diverifikasi grep sebelum dan sesudah.
+- API_BIND=127.0.0.1 ditambah di hummingbot-api .env.
+- Pemeriksaan bind dengan ss di akhir: gagal kalau ada service yang listen di 0.0.0.0 pada port 8000, 8088, 5432, 1883, 18083, atau 8083.
+- Header commit lama dihapus, diganti perintah pull latest dan catat HEAD yang di-pull, supaya tidak basi lagi.
+- Model diganti atas keputusan master 13 Nov 2026 00:15 WIB: pakai API HCNSEC saja. AGENT_KEY=openai:MiniMax-M3.1-Flash, MODEL_BASE_URL=https://api.hcnsec.cn/v1. HCNSEC terverifikasi 13 Nov 2026 00:00 WIB, models 200, 3 model, chat test OK 9 detik. Apinex tidak dipakai lagi untuk Condor ini. Kunci HCNSEC tidak dikirim lewat email, diisi lewat jalur aman sebelum tick dry run pertama.
+Jadwal master: trade seharusnya mulai jam 00:00 WIB 13 Nov 2026, sudah lewat. Blocker yang tersisa setelah revisi ini: hasil install Garing, tick dry run 1 dengan HCNSEC, preview baru, dan konfirmasi master sebelum live.
+
 ## 9. Keputusan master 12:35 WIB 12 Nov 2026
 
 Master setuju paket konservatif, dan minta cek diff dulu di chat sebelum push.
