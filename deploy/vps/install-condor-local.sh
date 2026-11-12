@@ -94,6 +94,16 @@
 #     repo; it takes effect when Garing re-runs the installer, which
 #     reinstalls condor-start-hb-api.sh. No change to it in Fase 1.6.
 #
+# Fase 1.7, 13 Nov 2026. Built after Garing's 05:56 WIB audit of f8ef5bb:
+#   - Step 2b loopback patch is now idempotent. Fase 1.2 required the
+#     0.0.0.0 pattern and failed on rerun against an already-patched
+#     checkout (the exact error Garing hit). Now: patch 0.0.0.0 when
+#     still public, accept 127.0.0.1 as already correct, fail only when
+#     neither pattern is found. Same rule for both files (Condor main.py
+#     and Hummingbot API Dockerfile). The rerun then continues to step 3
+#     (Compose rewrite) and step 7 (reinstall of condor-start-hb-api.sh
+#     with the GET / check), which is what Garing asked to be sure of.
+#
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
@@ -267,17 +277,33 @@ CLONESUBCMD
 # ── 2b. Loopback binds: patch 0.0.0.0 to 127.0.0.1, then verify ─────────
 msg "2b/8. Patching listeners to loopback (127.0.0.1)..."
 # Condor main.py _run_dual runs Uvicorn on 0.0.0.0 (line 719 at pinned commit).
-grep -q 'host="0.0.0.0"' "${DEPLOY_DIR}/condor/main.py" || fail "Condor main.py does not contain the expected 0.0.0.0 bind, do not guess a different patch, report this"
-sed -i 's/host="0.0.0.0"/host="127.0.0.1"/' "${DEPLOY_DIR}/condor/main.py"
+# Idempotent (Fase 1.7): a rerun meets an already-patched checkout, so
+# patch 0.0.0.0 when still public, accept 127.0.0.1 as already correct,
+# and fail only when neither pattern is found. Fase 1.2 required the
+# 0.0.0.0 pattern and failed on rerun; that is the bug fixed here.
+if grep -q 'host="0.0.0.0"' "${DEPLOY_DIR}/condor/main.py"; then
+    sed -i 's/host="0.0.0.0"/host="127.0.0.1"/' "${DEPLOY_DIR}/condor/main.py"
+    msg "  Condor main.py patched 0.0.0.0 to 127.0.0.1"
+elif grep -q 'host="127.0.0.1"' "${DEPLOY_DIR}/condor/main.py"; then
+    msg "  Condor main.py already binds 127.0.0.1, patch skipped"
+else
+    fail "Condor main.py contains neither 0.0.0.0 nor 127.0.0.1 bind, do not guess a different patch, report this"
+fi
 grep -q 'host="127.0.0.1"' "${DEPLOY_DIR}/condor/main.py" || fail "Condor main.py loopback patch did not apply"
 grep -q 'host="0.0.0.0"' "${DEPLOY_DIR}/condor/main.py" && fail "Condor main.py still contains 0.0.0.0 after patch" || true
 # Hummingbot API Dockerfile ENTRYPOINT runs Uvicorn on 0.0.0.0:8000.
 # The line is JSON form: "--host", "0.0.0.0", so match the quoted address.
-grep -qF '"0.0.0.0"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" || fail "Hummingbot API Dockerfile does not contain the expected 0.0.0.0 bind, do not guess a different patch, report this"
-sed -i 's/"0.0.0.0"/"127.0.0.1"/' "${DEPLOY_DIR}/hummingbot-api/Dockerfile"
+if grep -qF '"0.0.0.0"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile"; then
+    sed -i 's/"0.0.0.0"/"127.0.0.1"/' "${DEPLOY_DIR}/hummingbot-api/Dockerfile"
+    msg "  Hummingbot API Dockerfile patched 0.0.0.0 to 127.0.0.1"
+elif grep -qF '"127.0.0.1"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile"; then
+    msg "  Hummingbot API Dockerfile already binds 127.0.0.1, patch skipped"
+else
+    fail "Hummingbot API Dockerfile contains neither 0.0.0.0 nor 127.0.0.1 bind, do not guess a different patch, report this"
+fi
 grep -qF '"127.0.0.1"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" || fail "Hummingbot API Dockerfile loopback patch did not apply"
 grep -qF '"0.0.0.0"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" && fail "Hummingbot API Dockerfile still contains 0.0.0.0 after patch" || true
-msg "  both listeners patched to 127.0.0.1 and verified"
+msg "  both listeners on 127.0.0.1 and verified"
 
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
