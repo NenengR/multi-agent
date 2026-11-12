@@ -320,6 +320,10 @@ install -m 0644 "${INSTALL_ROOT}/deploy/vps/systemd/condor-infra.service" \
     /etc/systemd/system/condor-infra.service
 install -m 0644 "${INSTALL_ROOT}/deploy/vps/systemd/condor-main.service" \
     /etc/systemd/system/condor-main.service
+# Local run: Hummingbot API and Condor are on the same machine, so no
+# Tailscale is used. Strip tailscaled.service from the unit's After line
+# so the local service does not reference a service that is never installed.
+sed -i 's/ tailscaled.service//' /etc/systemd/system/condor-main.service
 install -m 0644 "${INSTALL_ROOT}/deploy/vps/systemd/condor-bootstrap-pipeline.service" \
     /etc/systemd/system/condor-bootstrap-pipeline.service
 install -m 0755 "${INSTALL_ROOT}/deploy/vps/systemd/condor-bootstrap-pipeline.sh" \
