@@ -57,6 +57,23 @@
 #     0.0.0.0:80. Final checks now fail if nginx is enabled or active,
 #     and the ss bind check also covers port 80.
 #
+# Fase 1.5, 13 Nov 2026. Built after Garing's 05:24 WIB install report:
+#   - Hummingbot /health 404: the pinned hummingbot-api (commit
+#     7ae108f, v1.0.1) has NO /health route. Verified from the pinned
+#     source: main.py defines only GET /, returning status running.
+#     The Fase 1 check in condor-start-hb-api.sh therefore always
+#     failed, exited 1, and failed condor-infra, because that script
+#     is condor-infra's ExecStartPost. Fix: check GET / expecting 200.
+#     The installer's own /health probe and printed URL are fixed too.
+#   - Installer honesty: step 8 only warned when condor-infra or
+#     condor-web was not active, so an install could exit 0 with infra
+#     down. Step 8 now FAILS the install in that case.
+#   - Broker unhealthy: the EMQX healthcheck is unchanged (emqx ping),
+#     but a 60s start_period is added, because EMQX first boot is slow
+#     and the old 10 retries could mark it unhealthy before it finished
+#     starting. The broker cause is not guessed; Garing is asked for
+#     docker logs and emqx ctl status output in the Fase 1.5 email.
+#
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
@@ -276,6 +293,9 @@ services:
       test: ["CMD", "EMQX_HEALTHCHECK=1 emqx ping"]
       interval: 10s
       retries: 10
+      # Fase 1.5: EMQX first boot is slow (certs, DB init). Without a
+      # start period the 10 retries can mark it unhealthy before it
+      # finishes starting. Give it 60s before counting failures.
     ports:
       - "127.0.0.1:1883:1883"
       - "127.0.0.1:8083:8083"
@@ -426,11 +446,11 @@ systemctl stop condor-main condor-bootstrap-pipeline 2>/dev/null || true
 msg "8/8. Verifying (infra health only, no strategies)..."
 sleep 10
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" ps || warn "could not list compose services"
-systemctl is-active condor-infra condor-web || warn "condor-infra or condor-web is not active, check systemctl status"
+systemctl is-active condor-infra condor-web || fail "condor-infra or condor-web is not active, installer stops here, check systemctl status and report"
 WEB_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8088/ 2>/dev/null || echo "000")"
 msg "condor web API on 127.0.0.1:8088 returned HTTP ${WEB_CODE} (any HTTP code here means the server is up; auth-gated routes may return 401 or 404)"
 systemctl is-enabled condor-bootstrap-pipeline 2>/dev/null | grep -q disabled && msg "bootstrap pipeline is disabled, as required" || warn "bootstrap pipeline is NOT disabled, check it before continuing"
-curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1 && msg "hummingbot-api /health: 200" || warn "hummingbot-api /health did not return 200 yet, check condor-start-hb-api.sh and report"
+curl -sf http://127.0.0.1:8000/ >/dev/null 2>&1 && msg "hummingbot-api /: 200" || warn "hummingbot-api / did not return 200 yet, check condor-start-hb-api.sh and report"
 # Credential file audit: no file holding a password may be group- or
 # other-readable. Check every runtime file the installer wrote.
 for _f in "${LOCAL_SECRETS_FILE}" "${COMPOSE_DIR}/docker-compose.yml" "${HB_ENV}" "${CONDOR_CFG}" "${INSTALL_ROOT}/condor/.env"; do
@@ -461,10 +481,10 @@ msg "nginx is not enabled or active"
 msg ""
 msg "Local non-trading install complete."
 msg "  condor dashboard API: http://127.0.0.1:8088 (web only, no Telegram bot)"
-msg "  hummingbot-api:    http://127.0.0.1:8000/health"
+msg "  hummingbot-api:    http://127.0.0.1:8000/"
 msg "  canonical secrets file: unchanged, still exactly 3 values"
 msg "  local passwords: /etc/condor/local-secrets.env (chmod 600)"
 msg "  condor-main and bootstrap: DISABLED, no strategies started, no executor, no order."
-msg "  Next: report the /health result and systemctl status to HAMID."
+msg "  Next: report the / result and systemctl status to HAMID."
 msg "  Do NOT start condor-main or condor-bootstrap-pipeline, do NOT enter any API key,"
 msg "  and do NOT connect Gate.io until HAMID sends the next step."
