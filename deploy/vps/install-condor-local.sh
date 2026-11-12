@@ -25,6 +25,26 @@
 #     The script verifies both patches and checks with ss that no
 #     service listens on 0.0.0.0 afterwards.
 #
+# Fase 1.3, 13 Nov 2026. Built after Garing's 03:51 WIB report of two
+# blockers in Phase 1.2:
+#   - Blocker 1, secrets file: the installer used to append eight local
+#     passwords to /etc/condor/secrets.env, but Pakle only allows that
+#     file to hold PAPER_MODE=true, LIVE_TRADING_CONFIRMED=no, and
+#     CONDOR_ADMIN_USERNAME=admin. Fix: generated local passwords go to
+#     a separate file /etc/condor/local-secrets.env (chmod 600) and the
+#     script now FAILS if the canonical file holds anything else.
+#   - Blocker 2, Telegram: Condor main.py always builds a Telegram
+#     Application with TELEGRAM_TOKEN, so condor-main cannot start
+#     without a real token. Fix: this local install does NOT run
+#     main.py at all. It runs only the FastAPI web app
+#     (condor.web.app:create_app) via a new unit condor-web.service,
+#     bound to 127.0.0.1:8088. That is code-verified: create_app needs
+#     no Telegram token, and condor/web/auth.py signs web JWTs from
+#     WEB_JWT_SECRET or a random secret persisted in config.yml, never
+#     from TELEGRAM_TOKEN. The Telegram bot is disabled in this mode;
+#     the Condor API and infra are unaffected. Strategies are still
+#     never started, bootstrap stays disabled.
+#
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
@@ -50,6 +70,7 @@ set -euo pipefail
 
 INSTALL_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SECRETS_FILE="${SECRETS_FILE:-/etc/condor/secrets.env}"
+LOCAL_SECRETS_FILE="${LOCAL_SECRETS_FILE:-/etc/condor/local-secrets.env}"
 CONDOR_USER="${CONDOR_USER:-condor}"
 LOG_PREFIX="[install-condor-local]"
 
@@ -67,14 +88,20 @@ HUMMINGBOT_API_COMMIT="${HUMMINGBOT_API_COMMIT:-7ae108f11bf20651682dbdff639a8717
 chmod 600 "${SECRETS_FILE}" 2>/dev/null || true
 
 # Non-trading guard. This script never installs a live configuration.
+# The canonical secrets file must hold exactly the three agreed values
+# and nothing else. Generated local passwords live in LOCAL_SECRETS_FILE.
 grep -q '^PAPER_MODE=true' "${SECRETS_FILE}" || fail "PAPER_MODE must be true in ${SECRETS_FILE}"
 grep -q '^LIVE_TRADING_CONFIRMED=no' "${SECRETS_FILE}" || fail "LIVE_TRADING_CONFIRMED must be no in ${SECRETS_FILE}"
+grep -q '^CONDOR_ADMIN_USERNAME=[^[:space:]]' "${SECRETS_FILE}" || fail "CONDOR_ADMIN_USERNAME must be set in ${SECRETS_FILE}"
+CANONICAL_LINES="$(grep -vcE '^\s*(#|$)' "${SECRETS_FILE}")"
+[ "${CANONICAL_LINES}" = "3" ] || fail "${SECRETS_FILE} must hold exactly 3 values (PAPER_MODE, LIVE_TRADING_CONFIRMED, CONDOR_ADMIN_USERNAME), but it holds ${CANONICAL_LINES}. Restore it to the three agreed values and re-run."
+grep -qE '^(HB_API|CONFIG|GATEWAY|BROKER|POSTGRES|EMQX|TELEGRAM|ANTHROPIC|OPENAI|TAILSCALE)[A-Z_]*=' "${SECRETS_FILE}" && fail "${SECRETS_FILE} must not hold passwords or credentials, move them to ${LOCAL_SECRETS_FILE}" || true
 # shellcheck disable=SC1090
 . "${SECRETS_FILE}"
+[ -f "${LOCAL_SECRETS_FILE}" ] && . "${LOCAL_SECRETS_FILE}"
 [ "${ADMIN_USER_ID:-1}" != "0" ] || fail "ADMIN_USER_ID must not be 0"
 # Explicitly reject any live or exchange credentials in this file. This is
 # a local install; a live key here means the wrong file was used.
-grep -q '^GATEWAY_URL=https://localhost:15888' "${SECRETS_FILE}" 2>/dev/null && true
 grep -Eq '^[A-Z_]*GATE.*(API|SECRET).*=[^[:space:]]' "${SECRETS_FILE}" && fail "No exchange API key or secret may be in ${SECRETS_FILE} for a local install"
 
 # Docker daemon must already be running. Garing reported 12 Nov 2026 that
@@ -88,12 +115,16 @@ msg "Secrets file:  ${SECRETS_FILE}"
 msg "Mode: LOCAL NON-TRADING (dry_run only, no strategies, no Tailscale, no firewall change)"
 
 # ── Local passwords: generate when empty, never print them ──────────────
+# They go ONLY to LOCAL_SECRETS_FILE. The canonical file is never written.
+touch "${LOCAL_SECRETS_FILE}"
+chown root:root "${LOCAL_SECRETS_FILE}" 2>/dev/null || true
+chmod 600 "${LOCAL_SECRETS_FILE}"
 ensure_local_password() {
     local name="$1" val="${!1:-}"
     if [ -z "${val}" ]; then
         val="$(openssl rand -hex 16)"
-        printf '%s=%s\n' "${name}" "${val}" >> "${SECRETS_FILE}"
-        msg "  generated local ${name} (stored only in ${SECRETS_FILE})"
+        printf '%s=%s\n' "${name}" "${val}" >> "${LOCAL_SECRETS_FILE}"
+        msg "  generated local ${name} (stored only in ${LOCAL_SECRETS_FILE})"
     fi
 }
 ensure_local_password HB_API_USERNAME
@@ -104,9 +135,11 @@ ensure_local_password BROKER_USERNAME
 ensure_local_password BROKER_PASSWORD
 ensure_local_password POSTGRES_PASSWORD
 ensure_local_password EMQX_DASHBOARD_PASSWORD
-# Re-read after generation.
+# Re-read after generation: canonical file first, then local passwords.
 # shellcheck disable=SC1090
 . "${SECRETS_FILE}"
+# shellcheck disable=SC1090
+. "${LOCAL_SECRETS_FILE}"
 # The three Hummingbot secrets must differ, same rule as the production installer.
 [ "${HB_API_PASSWORD}" != "${CONFIG_PASSWORD}" ] || fail "CONFIG_PASSWORD must differ from HB_API_PASSWORD"
 [ "${HB_API_PASSWORD}" != "${GATEWAY_PASSPHRASE}" ] || fail "GATEWAY_PASSPHRASE must differ from HB_API_PASSWORD"
@@ -336,10 +369,16 @@ chmod 600 "${INSTALL_ROOT}/condor/.env"
 mkdir -p "${INSTALL_ROOT}/condor/state" "${INSTALL_ROOT}/condor/agents/_signals/active"
 chown -R "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}/condor/state" "${INSTALL_ROOT}/condor/agents/_signals"
 
-# ── 7. systemd units: infra + main only, bootstrap DISABLED ─────────────
-msg "7/8. systemd service units (bootstrap stays DISABLED)..."
+# ── 7. systemd units: infra + web API only, main + bootstrap DISABLED ───
+# condor-main runs main.py, which always builds a Telegram Application and
+# needs a real TELEGRAM_TOKEN. This local install has no Telegram token, so
+# it installs condor-web.service instead: the FastAPI web app only
+# (condor.web.app:create_app), bound to 127.0.0.1:8088, no bot, no strategies.
+msg "7/8. systemd service units (web API only, main and bootstrap DISABLED)..."
 install -m 0644 "${INSTALL_ROOT}/deploy/vps/systemd/condor-infra.service" \
     /etc/systemd/system/condor-infra.service
+install -m 0644 "${INSTALL_ROOT}/deploy/vps/systemd/condor-web.service" \
+    /etc/systemd/system/condor-web.service
 install -m 0644 "${INSTALL_ROOT}/deploy/vps/systemd/condor-main.service" \
     /etc/systemd/system/condor-main.service
 # Local run: Hummingbot API and Condor are on the same machine, so no
@@ -356,15 +395,17 @@ install -m 0755 "${INSTALL_ROOT}/deploy/vps/systemd/condor-start-hb-api.sh" \
     /usr/local/bin/condor-start-hb-api.sh
 
 systemctl daemon-reload
-systemctl enable --now condor-infra condor-main
-systemctl disable condor-bootstrap-pipeline 2>/dev/null || true
-systemctl stop condor-bootstrap-pipeline 2>/dev/null || true
+systemctl enable --now condor-infra condor-web
+systemctl disable condor-main condor-bootstrap-pipeline 2>/dev/null || true
+systemctl stop condor-main condor-bootstrap-pipeline 2>/dev/null || true
 
 # ── 8. Verify: infra health only, no strategies ─────────────────────────
 msg "8/8. Verifying (infra health only, no strategies)..."
 sleep 10
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" ps || warn "could not list compose services"
-systemctl is-active condor-infra condor-main || warn "condor-infra or condor-main is not active, check systemctl status"
+systemctl is-active condor-infra condor-web || warn "condor-infra or condor-web is not active, check systemctl status"
+WEB_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8088/ 2>/dev/null || echo "000")"
+msg "condor web API on 127.0.0.1:8088 returned HTTP ${WEB_CODE} (any HTTP code here means the server is up; auth-gated routes may return 401 or 404)"
 systemctl is-enabled condor-bootstrap-pipeline 2>/dev/null | grep -q disabled && msg "bootstrap pipeline is disabled, as required" || warn "bootstrap pipeline is NOT disabled, check it before continuing"
 curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1 && msg "hummingbot-api /health: 200" || warn "hummingbot-api /health did not return 200 yet, check condor-start-hb-api.sh and report"
 # Bind check: no service may listen on 0.0.0.0. Report every public listener.
@@ -380,9 +421,11 @@ fi
 # ── Final ───────────────────────────────────────────────────────────────
 msg ""
 msg "Local non-trading install complete."
-msg "  condor dashboard:  http://127.0.0.1:8088"
+msg "  condor dashboard API: http://127.0.0.1:8088 (web only, no Telegram bot)"
 msg "  hummingbot-api:    http://127.0.0.1:8000/health"
-msg "  bootstrap: DISABLED, no strategies started, no executor, no order."
+msg "  canonical secrets file: unchanged, still exactly 3 values"
+msg "  local passwords: /etc/condor/local-secrets.env (chmod 600)"
+msg "  condor-main and bootstrap: DISABLED, no strategies started, no executor, no order."
 msg "  Next: report the /health result and systemctl status to HAMID."
-msg "  Do NOT start condor-bootstrap-pipeline, do NOT enter any API key,"
+msg "  Do NOT start condor-main or condor-bootstrap-pipeline, do NOT enter any API key,"
 msg "  and do NOT connect Gate.io until HAMID sends the next step."

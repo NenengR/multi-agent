@@ -1,0 +1,36 @@
+[Unit]
+Description=Condor Dashboard API only, no Telegram bot, no strategies (local non-trading install)
+Documentation=https://github.com/NenengR/condor
+After=network-online.target docker.service condor-infra.service
+Wants=condor-infra.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=condor
+Group=condor
+WorkingDirectory=/home/condor/condor-deploy/condor
+EnvironmentFile=/etc/condor/secrets.env
+EnvironmentFile=/etc/condor/local-secrets.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/condor/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/home/condor/condor-deploy/condor/.env
+
+ExecStartPre=/usr/bin/test -w /home/condor/condor-deploy/condor/state
+ExecStart=/home/condor/.local/bin/uv run --directory /home/condor/condor-deploy/condor uvicorn condor.web.app:create_app --factory --host 127.0.0.1 --port 8088
+
+Restart=on-failure
+RestartSec=10s
+
+# Hard memory cap: protect the box from OOM.
+MemoryMax=6G
+MemoryHigh=5G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=condor-web
+
+TimeoutStopSec=120s
+
+[Install]
+WantedBy=multi-user.target

@@ -110,6 +110,13 @@ Perbaikan di install-condor-local.sh, terverifikasi di file asli hasil clone:
 - Model diganti atas keputusan master 13 Nov 2026 00:15 WIB: pakai API HCNSEC saja. AGENT_KEY=openai:MiniMax-M3.1-Flash, MODEL_BASE_URL=https://api.hcnsec.cn/v1. HCNSEC terverifikasi 13 Nov 2026 00:00 WIB, models 200, 3 model, chat test OK 9 detik. Apinex tidak dipakai lagi untuk Condor ini. Kunci HCNSEC tidak dikirim lewat email, diisi lewat jalur aman sebelum tick dry run pertama.
 Jadwal master: trade seharusnya mulai jam 00:00 WIB 13 Nov 2026, sudah lewat. Blocker yang tersisa setelah revisi ini: hasil install Garing, tick dry run 1 dengan HCNSEC, preview baru, dan konfirmasi master sebelum live.
 
+## 12. Fase 1.3, secrets terpisah dan web API tanpa Telegram, 13 Nov 2026 04:10 WIB
+
+Docker sudah pulih 13 Nov 2026: Garing force-stop dua container dan dockerd yang macet (PID 10115 sejak 11 Nov) atas persetujuan Pakle, docker.service aktif, Docker 29.1.3, lalu TASHI dibuat ulang tag ghcr.io/tashigit/tashi-depin-worker:0 dengan auth volume lama, dan OptimAI Crawl4AI healthy. TASHI log bonded dan tersambung ke orchestrator, belum ada tanda earning/eligible. OptimAI dan Teneo active.
+Dua blocker Phase 1.2 yang dilaporkan Garing jam 03:51 WIB, keduanya dijawab di revisi ini:
+1. Secrets file: installer lama menambahkan delapan password lokal ke /etc/condor/secrets.env, padahal Pakle hanya mengizinkan tiga nilai. Perbaikan: password lokal dibuat di file terpisah /etc/condor/local-secrets.env (chmod 600), dan installer GAGAL kalau file kanonis tidak berisi tepat tiga nilai (PAPER_MODE=true, LIVE_TRADING_CONFIRMED=no, CONDOR_ADMIN_USERNAME=admin) atau mengandung kunci credential apa pun. Tidak perlu SECRETS_FILE override, jalankan installer seperti biasa, file kanonis tidak pernah ditulis.
+2. Telegram: main.py selalu membangun Telegram Application dengan TELEGRAM_TOKEN, jadi condor-main tidak bisa start tanpa token asli. Perbaikan, terverifikasi dari kode Condor: instalasi lokal TIDAK menjalankan main.py sama sekali, melainkan hanya FastAPI web app (condor.web.app:create_app) lewat unit baru condor-web.service, bind 127.0.0.1:8088. create_app tidak butuh Telegram token, dan condor/web/auth.py menandatangani JWT web dari WEB_JWT_SECRET atau secret acak di config.yml, bukan dari TELEGRAM_TOKEN. Bot Telegram nonaktif di mode ini, API dan infra Condor tidak terpengaruh, strategi tetap tidak pernah di-start, bootstrap tetap disabled.
+
 ## 9. Keputusan master 12:35 WIB 12 Nov 2026
 
 Master setuju paket konservatif, dan minta cek diff dulu di chat sebelum push.
