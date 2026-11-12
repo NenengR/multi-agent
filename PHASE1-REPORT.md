@@ -84,6 +84,20 @@ Jangan mulai live sebelum empat hal ini diputuskan:
 - Perilaku runtime pola pkill dan nilai literal di .env hasil generate hanya dinilai dari kode, dan harus diuji di VPS test paper.
 - Tidak ada secret asli yang dipakai dalam audit ini. Semua password di file contoh masih kosong atau placeholder.
 
+## 10. Fase 1.1, installer lokal non-trading, 12 Nov 2026 22:48 WIB
+
+Garing memeriksa instalasi jam 20:43 WIB dan TIDAK menjalankan installer lama, dengan alasan yang benar: installer lama mereset dan mengaktifkan UFW, memasang dan mengautentikasi Tailscale, lalu mengaktifkan bootstrap yang memulai agent strategies, dan akan berhenti di TELEGRAM_TOKEN kosong serta preflight HCNSEC. Docker service dilaporkan inactive walau docker ps masih menampilkan container TASHI dan OptimAI.
+
+File baru: deploy/vps/install-condor-local.sh, 353 baris, lolos bash -n.
+Isinya:
+- Menolak jalan kecuali PAPER_MODE=true dan LIVE_TRADING_CONFIRMED=no, dan menolak kalau ada kunci exchange di secrets.env.
+- Tidak ada perubahan firewall, tidak ada Tailscale, tidak ada Telegram, tidak ada HCNSEC, tidak ada Anthropic.
+- Password lokal (Postgres, EMQX, Hummingbot API, config, gateway, broker) dibuat otomatis dengan openssl rand kalau kosong, disimpan hanya di /etc/condor/secrets.env mode 600, tidak pernah dicetak atau dikirim.
+- Cek docker info dulu, berhenti dengan pesan jelas kalau daemon tidak jalan, jangan restart diam-diam.
+- Model Apinex OpenAI: AGENT_KEY=openai:free/deepseek-v4.1-flash, MODEL_BASE_URL=https://api.apinex.bond/v1, OPENAI_API_KEY dikosongkan, diisi nanti lewat jalur aman sebelum tick dry run pertama.
+- Systemd: hanya enable dan start condor-infra dan condor-main. condor-bootstrap-pipeline di-install tapi di-disable dan di-stop, tidak ada strategi yang jalan, tidak ada executor, tidak ada order.
+- Verifikasi akhir hanya /health dan status systemd, lalu laporkan ke HAMID.
+
 ## 9. Keputusan master 12:35 WIB 12 Nov 2026
 
 Master setuju paket konservatif, dan minta cek diff dulu di chat sebelum push.
