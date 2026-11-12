@@ -73,6 +73,26 @@
 #     and the old 10 retries could mark it unhealthy before it finished
 #     starting. The broker cause is not guessed; Garing is asked for
 #     docker logs and emqx ctl status output in the Fase 1.5 email.
+#     NOTE, corrected in Fase 1.6: the start_period line was NEVER
+#     actually added in Fase 1.5, only mentioned in a comment. See the
+#     Fase 1.6 section below for the real fix.
+#
+# Fase 1.6, 13 Nov 2026. Built after Garing's 05:44 WIB audit of f7630da:
+#   - Broker healthcheck syntax: the test was ["CMD",
+#     "EMQX_HEALTHCHECK=1 emqx ping"]. CMD runs the string as one
+#     literal executable name, so Docker reported "executable file not
+#     found in $PATH" and the broker stayed unhealthy, even though
+#     Garing proved the broker itself is fine (emqx ctl status: node
+#     started, emqx ping: pong). Fix: ["CMD-SHELL", ...], which runs
+#     via /bin/sh -c so the env assignment is interpreted correctly.
+#   - start_period: the real YAML property start_period: 60s is now
+#     added to the broker healthcheck. Fase 1.5 only wrote a comment
+#     about it and never added the line; that mistake is owned here.
+#     This time the generated compose file is validated with a YAML
+#     parse before push, so a comment-only fix cannot pass again.
+#   - The GET / fix for hummingbot-api from Fase 1.5 is already in the
+#     repo; it takes effect when Garing re-runs the installer, which
+#     reinstalls condor-start-hb-api.sh. No change to it in Fase 1.6.
 #
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
@@ -290,12 +310,19 @@ services:
     volumes:
       - /opt/condor/data/broker:/opt/emqx/data
     healthcheck:
-      test: ["CMD", "EMQX_HEALTHCHECK=1 emqx ping"]
+      test: ["CMD-SHELL", "EMQX_HEALTHCHECK=1 emqx ping"]
       interval: 10s
       retries: 10
-      # Fase 1.5: EMQX first boot is slow (certs, DB init). Without a
-      # start period the 10 retries can mark it unhealthy before it
-      # finishes starting. Give it 60s before counting failures.
+      start_period: 60s
+      # Fase 1.6: the test MUST be CMD-SHELL, not CMD. CMD runs the
+      # string as one literal executable name, so Docker reported
+      # "executable file not found in $PATH" and the broker stayed
+      # unhealthy even though emqx ctl status and emqx ping both work
+      # inside the container. CMD-SHELL runs it via /bin/sh -c, so the
+      # env assignment is interpreted correctly. start_period is a real
+      # YAML property here (Fase 1.5 only mentioned it in a comment and
+      # never added the line); EMQX first boot is slow and needs 60s
+      # before failures are counted.
     ports:
       - "127.0.0.1:1883:1883"
       - "127.0.0.1:8083:8083"
