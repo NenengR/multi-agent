@@ -819,6 +819,137 @@ fi
 grep -q 'get_config_manager().get_server("local")' "${SCAN_UNIVERSE_PY}" || fail "Routine auth patch did not apply"
 python3 -m py_compile "${SCAN_UNIVERSE_PY}" || fail "scan_universe.py does not compile after patch"
 
+# ── 2h. Pin sentiment + fundamental to gate_io_perpetual ──
+# Fase 2.2, 13 Nov 2026. Diagnosis of the full-chain dry_run showed the
+# sentiment analyst calling get_market_data on binance_perpetual (funding
+# 500 because Binance exchangeInfo 451s from Cue), and the fundamental
+# analyst failing the same way. Verified from the pinned code: the
+# technical and screener strategy.md frontmatter both carry
+# "connector_name: gate_io_perpetual" in default_config, while the
+# sentiment and fundamental strategy.md frontmatter have NO connector_name
+# line at all, so their [CURRENT CONFIG] fell back to binance_perpetual.
+# Fix: add the same line to both frontmatter blocks (idempotent, same
+# fail-closed rule as 2b/2c/2d/2e/2f/2g: skip when already present, fail
+# only when the exact unpatched block is not found). Never guess.
+msg "2h/8. Pinning sentiment + fundamental connector to gate_io_perpetual..."
+SENTIMENT_STRATEGY_MD="${DEPLOY_DIR}/condor/agents/sentiment_analyst/strategies/sentiment_scanner/strategy.md"
+FUNDAMENTAL_STRATEGY_MD="${DEPLOY_DIR}/condor/agents/fundamental_analyst/strategies/fundamental_scanner/strategy.md"
+for _f in "${SENTIMENT_STRATEGY_MD}" "${FUNDAMENTAL_STRATEGY_MD}"; do
+    if grep -q 'connector_name: gate_io_perpetual' "${_f}"; then
+        msg "  $(basename "$(dirname "${_f}")") already pinned, patch skipped"
+    else
+        python3 - "${_f}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# NOTE: the old block ends with a TRAILING NEWLINE (the closing quotes sit
+# on their own line), pinning the end of the match so a file whose last
+# changed line merely has extra text appended fails instead of patching.
+old = '''  execution_mode: loop
+  max_pairs_per_tick: 5
+'''
+new = '''  execution_mode: loop
+  connector_name: gate_io_perpetual   # overridable: binance_perpetual, bybit_perpetual, etc.
+  max_pairs_per_tick: 5
+'''
+if old not in src:
+    print(f"FAIL {path} does not contain the expected default_config block, do not guess a different patch, report this", file=sys.stderr)
+    sys.exit(1)
+open(path, "w").write(src.replace(old, new, 1))
+print("patched")
+PYEOF
+        msg "  $(basename "$(dirname "${_f}")") pinned to gate_io_perpetual"
+    fi
+    grep -q 'connector_name: gate_io_perpetual' "${_f}" || fail "Connector pin did not apply to ${_f}"
+done
+
+# ── 2i. Routine prices: retry on timeout, name the exception class ──
+# Fase 2.2, 13 Nov 2026. In e7 the routine's batch prices call failed with
+# an EMPTY exception string (no traceback, no class, last error blank).
+# The log shows a "Ticker fetch timed out for 'gate_io_perpetual'" warning
+# just before, and the fallback manual path then got HTTP 200: the prices
+# call hit the 30 s client timeout while the API was briefly slow, and the
+# exception (asyncio.TimeoutError) has an empty str(). The retry policy
+# only covered 429, so there was no second attempt.
+#   Fix: retry once on asyncio.TimeoutError as well as on 429, and record
+#   the exception CLASS name in last_error and in the warning line, so an
+#   empty TimeoutError still reads as "TimeoutError: ". Applies on top of
+#   the Fase 2.1 (2g) prices block; the old block below is that patched
+#   state. Idempotent, fail-closed, same rule as the other steps.
+msg "2i/8. Adding timeout retry to routine batch prices..."
+if grep -q 'isinstance(e, asyncio.TimeoutError)' "${SCAN_UNIVERSE_PY}"; then
+    msg "  scan_universe.py timeout retry already present, patch skipped"
+else
+    python3 - "${SCAN_UNIVERSE_PY}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# NOTE: every old block below ends with a TRAILING NEWLINE (the closing
+# quotes sit on their own line). That pins the end of the match: a plain
+# substring check would also match a file where the last changed line
+# merely has extra text appended to it; the trailing newline makes that
+# fail instead of patching a corrupted file.
+old_prices = '''    # --- 1. Batch prices (with retry for 429) ---
+    prices: dict = {}
+    last_error = "no attempt made"
+    for attempt in range(3):
+        try:
+            prices_resp = await client.market_data.get_prices(connector, universe)
+            if isinstance(prices_resp, dict):
+                prices = prices_resp.get("prices", prices_resp)
+            elif isinstance(prices_resp, list):
+                # list of {pair, price} dicts
+                prices = {p.get("trading_pair", p.get("pair", "")): p.get("price") for p in prices_resp}
+            break
+        except Exception as e:
+            last_error = str(e)
+            if "429" in str(e) and attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            logger.warning(f"Batch prices failed (attempt {attempt+1}): {e}")
+            break
+
+    if not prices:
+        return RoutineResult(text=f"⚠️ Could not fetch prices — last error: {last_error}")
+'''
+new_prices = '''    # --- 1. Batch prices (with retry for 429 and timeouts) ---
+    prices: dict = {}
+    last_error = "no attempt made"
+    for attempt in range(3):
+        try:
+            prices_resp = await client.market_data.get_prices(connector, universe)
+            if isinstance(prices_resp, dict):
+                prices = prices_resp.get("prices", prices_resp)
+            elif isinstance(prices_resp, list):
+                # list of {pair, price} dicts
+                prices = {p.get("trading_pair", p.get("pair", "")): p.get("price") for p in prices_resp}
+            break
+        except Exception as e:
+            # Fase 2.2: an empty str(e) (e.g. asyncio.TimeoutError) left the
+            # error text blank in e7. Record the exception class too, and
+            # retry once on a timeout: the batch prices call can exceed the
+            # 30 s client timeout when the API is briefly slow.
+            last_error = f"{type(e).__name__}: {e}"
+            if ("429" in str(e) or isinstance(e, asyncio.TimeoutError)) and attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            logger.warning(f"Batch prices failed (attempt {attempt+1}): {type(e).__name__}: {e}")
+            break
+
+    if not prices:
+        return RoutineResult(text=f"⚠️ Could not fetch prices — last error: {last_error}")
+'''
+if old_prices not in src:
+    print("FAIL scan_universe.py does not contain the expected prices block (Fase 2.1 state), do not guess a different patch, report this", file=sys.stderr)
+    sys.exit(1)
+open(path, "w").write(src.replace(old_prices, new_prices, 1))
+print("patched")
+PYEOF
+    msg "  scan_universe.py patched: timeout retry + exception class"
+fi
+grep -q 'isinstance(e, asyncio.TimeoutError)' "${SCAN_UNIVERSE_PY}" || fail "Routine timeout retry patch did not apply"
+python3 -m py_compile "${SCAN_UNIVERSE_PY}" || fail "scan_universe.py does not compile after patch"
+
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
 mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
