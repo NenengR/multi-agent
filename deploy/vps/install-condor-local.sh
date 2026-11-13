@@ -431,6 +431,251 @@ fi
 grep -q 'OPENAI_API_KEY is not set' "${PYDANTIC_CLIENT}" || fail "OpenAI API key patch did not apply"
 python3 -m py_compile "${PYDANTIC_CLIENT}" || fail "pydantic_ai_client.py does not compile after patch"
 
+# ── 2d. Candle cap: get_candles must never return 720 candles per call ──
+# Fase 2.0, 13 Nov 2026. Measured from the pinned code + Garing's log:
+#   - The static tick prompt is small (~7k tokens). The blowup is DYNAMIC:
+#     tool results accumulate during the tick. One candles call defaults to
+#     days=30 (720 candles at 1h, ~20k tokens as a table); 10 pairs is
+#     ~200k tokens, enough to exceed FortyTwo's 262,144 limit.
+#   - The strategy tells the agent to pass limit=24, but NEITHER
+#     get_market_data nor get_candles accepts a limit parameter, so the
+#     instruction is silently ignored and the full 30 days come back.
+#   Fix: add a limit parameter to get_candles AND to the get_market_data
+#   MCP tool, plus an absolute cap of 48 records per call, so no caller
+#   (and no model) can fetch more than 48 candles in one call.
+#   Idempotent (same rule as 2b/2c): skip when already patched, fail only
+#   when the exact unpatched block is not found. Never guess a patch.
+msg "2d/8. Capping candles per call (market_data.py)..."
+CANDLES_PY="${DEPLOY_DIR}/condor/mcp_servers/hummingbot_api/tools/market_data.py"
+if grep -q 'max_records = min(max_records, 48)' "${CANDLES_PY}"; then
+    msg "  market_data.py already patched, patch skipped"
+else
+    python3 - "${CANDLES_PY}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# NOTE: every old block below ends with a TRAILING NEWLINE (the closing
+# quotes sit on their own line). That pins the end of the match: a plain
+# substring check would also match a file where the last changed line
+# merely has extra text appended to it, and the patch would then
+# "succeed" on a corrupted file. The trailing newline makes that fail.
+old_sig = '''async def get_candles(
+    client: Any,
+    connector_name: str,
+    trading_pair: str,
+    interval: str = "1h",
+    days: int = 30,
+) -> dict[str, Any]:
+    """
+    Get candle data for a trading pair.
+'''
+new_sig = '''async def get_candles(
+    client: Any,
+    connector_name: str,
+    trading_pair: str,
+    interval: str = "1h",
+    days: int = 30,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """
+    Get candle data for a trading pair.
+'''
+old_doc = """        interval: Candle interval (e.g., '1h', '5m', '1d')
+        days: Number of days of historical data
+
+    Returns:
+        Dictionary containing candles data and formatted table
+"""
+new_doc = """        interval: Candle interval (e.g., '1h', '5m', '1d')
+        days: Number of days of historical data
+        limit: Maximum candles to return (caps the record count; absolute cap 48)
+
+    Returns:
+        Dictionary containing candles data and formatted table
+"""
+old_cap = '''    # Adjust for interval multiplier
+    interval_num = interval[:-1]
+    if interval_num:
+        max_records = int(max_records / int(interval_num))
+
+    # Fetch candles
+    candles = await client.market_data.get_candles(
+        connector_name=connector_name,
+'''
+new_cap = '''    # Adjust for interval multiplier
+    interval_num = interval[:-1]
+    if interval_num:
+        max_records = int(max_records / int(interval_num))
+
+    # Fase 2.0: cap candles per call. One tool result must not blow up the
+    # model context: 30d x 1h is 720 candles (~20k tokens as a table); 10
+    # pairs would exceed a 262k context and stall a 1M-context model past
+    # its request timeout. The strategy asks for 24; the absolute cap is 48.
+    if limit is not None:
+        max_records = min(max_records, limit)
+    max_records = min(max_records, 48)
+
+    # Fetch candles
+    candles = await client.market_data.get_candles(
+        connector_name=connector_name,
+'''
+for label, old, new in (("signature", old_sig, new_sig), ("docstring", old_doc, new_doc), ("cap", old_cap, new_cap)):
+    if old not in src:
+        print(f"FAIL market_data.py does not contain the expected get_candles {label} block, do not guess a different patch, report this", file=sys.stderr)
+        sys.exit(1)
+    src = src.replace(old, new, 1)
+open(path, "w").write(src)
+print("patched")
+PYEOF
+    msg "  market_data.py patched: get_candles capped at 48 records"
+fi
+grep -q 'max_records = min(max_records, 48)' "${CANDLES_PY}" || fail "Candle cap patch did not apply"
+python3 -m py_compile "${CANDLES_PY}" || fail "market_data.py does not compile after patch"
+
+# ── 2e. Candle limit passthrough: get_market_data accepts limit ────────
+# Fase 2.0, 13 Nov 2026. The MCP tool get_market_data is the only way the
+# agent fetches candles, and it never accepted the limit the strategy
+# instructs (limit=24). This patch adds the parameter and passes it to
+# get_candles, so the strategy instruction finally works. Same idempotent
+# rule as 2b/2c/2d: skip when already patched, fail only when the exact
+# unpatched block is not found.
+msg "2e/8. Adding limit passthrough (hummingbot_api server.py)..."
+HB_SERVER_PY="${DEPLOY_DIR}/condor/mcp_servers/hummingbot_api/server.py"
+if grep -q 'limit: int | None = None' "${HB_SERVER_PY}"; then
+    msg "  server.py already patched, patch skipped"
+else
+    python3 - "${HB_SERVER_PY}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# NOTE: every old block below ends with a TRAILING NEWLINE (the closing
+# quotes sit on their own line). That pins the end of the match: a plain
+# substring check would also match a file where the last changed line
+# merely has extra text appended to it; the trailing newline makes that
+# fail instead of patching a corrupted file.
+old_sig = '''async def get_market_data(
+    data_type: Literal["prices", "candles", "funding_rate", "order_book"],
+    connector_name: str,
+    trading_pairs: list[str] | None = None,
+    trading_pair: str | None = None,
+    interval: str = "1h",
+    days: int = 30,
+    query_type: (
+        Literal[
+'''
+new_sig = '''async def get_market_data(
+    data_type: Literal["prices", "candles", "funding_rate", "order_book"],
+    connector_name: str,
+    trading_pairs: list[str] | None = None,
+    trading_pair: str | None = None,
+    interval: str = "1h",
+    days: int = 30,
+    limit: int | None = None,
+    query_type: (
+        Literal[
+'''
+old_doc = """        days: Number of days of historical data for 'candles' (default: 30).
+        query_type: Order book query type for 'order_book' (default: 'snapshot'). Options: 'snapshot',
+            'volume_for_price', 'price_for_volume', 'quote_volume_for_price', 'price_for_quote_volume'.
+"""
+new_doc = """        days: Number of days of historical data for 'candles' (default: 30).
+        limit: Maximum candles to return for 'candles' (the strategy asks for 24; absolute cap 48).
+        query_type: Order book query type for 'order_book' (default: 'snapshot'). Options: 'snapshot',
+            'volume_for_price', 'price_for_volume', 'quote_volume_for_price', 'price_for_quote_volume'.
+"""
+old_call = '''        result = await market_data_tools.get_candles(
+            client=client,
+            connector_name=connector_name,
+            trading_pair=trading_pair,
+            interval=interval,
+            days=days,
+        )
+        return (
+            f"Candles for {result['trading_pair']} on {result['connector_name']}:\\n"
+'''
+new_call = '''        result = await market_data_tools.get_candles(
+            client=client,
+            connector_name=connector_name,
+            trading_pair=trading_pair,
+            interval=interval,
+            days=days,
+            limit=limit,
+        )
+        return (
+            f"Candles for {result['trading_pair']} on {result['connector_name']}:\\n"
+'''
+for label, old, new in (("signature", old_sig, new_sig), ("docstring", old_doc, new_doc), ("call", old_call, new_call)):
+    if old not in src:
+        print(f"FAIL server.py does not contain the expected get_market_data {label} block, do not guess a different patch, report this", file=sys.stderr)
+        sys.exit(1)
+    src = src.replace(old, new, 1)
+open(path, "w").write(src)
+print("patched")
+PYEOF
+    msg "  server.py patched: get_market_data accepts limit"
+fi
+grep -q 'limit: int | None = None' "${HB_SERVER_PY}" || fail "Limit passthrough patch did not apply"
+python3 -m py_compile "${HB_SERVER_PY}" || fail "server.py does not compile after patch"
+
+# ── 2f. Routine allowlist: market_screener may call manage_routines ───
+# Fase 2.0, 13 Nov 2026. The strategy's preferred Step 0 is the
+# scan_universe routine: one call returns the whole ranked table, instead
+# of ~10 per-pair get_market_data calls. But the agent could never call it:
+# manage_routines is not in the AGENT.md tools allowlist, and
+# _prepare_tools filters everything else out before the model sees it.
+# Garing confirmed the routine "tidak tersedia dan tidak berjalan" on the
+# MiniMax tick. This patch adds it to the allowlist.
+# NOTE: the allowlist is by tool NAME, so the agent also gains the
+# routine tool's other actions (list/describe/create/edit/delete). The
+# strategy only instructs run; this is our own screener in a dry-run
+# experiment, and the routine it runs (scan_universe) is code-reviewed.
+# If the routine fails at runtime, the strategy falls back to
+# get_market_data per pair, so the tick still works.
+# Idempotent: skip when already present, fail only when the exact
+# unpatched tools list is not found.
+msg "2f/8. Adding manage_routines to the market_screener allowlist..."
+SCREENER_AGENT_MD="${DEPLOY_DIR}/condor/agents/market_screener/AGENT.md"
+if grep -q '^- manage_routines$' "${SCREENER_AGENT_MD}"; then
+    msg "  market_screener AGENT.md already patched, patch skipped"
+else
+    python3 - "${SCREENER_AGENT_MD}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# NOTE: the old block below ends with a TRAILING NEWLINE (the closing
+# quotes sit on their own line). That pins the end of the match: a plain
+# substring check would also match a file where the last list line merely
+# has extra text appended to it; the trailing newline makes that fail
+# instead of patching a corrupted file.
+old = '''tools:
+- get_market_data
+- manage_signal
+- manage_memory
+- manage_skill
+- search_history
+when_to_consult: When the user asks which pairs are worth trading right now, where
+  the market's opportunities are, or wants a ranked watchlist across many perpetual
+'''
+new = '''tools:
+- get_market_data
+- manage_signal
+- manage_memory
+- manage_skill
+- search_history
+- manage_routines
+when_to_consult: When the user asks which pairs are worth trading right now, where
+  the market's opportunities are, or wants a ranked watchlist across many perpetual
+'''
+if old not in src:
+    print("FAIL market_screener AGENT.md does not contain the expected tools list, do not guess a different patch, report this", file=sys.stderr)
+    sys.exit(1)
+open(path, "w").write(src.replace(old, new, 1))
+print("patched")
+PYEOF
+    msg "  market_screener AGENT.md patched: manage_routines allowlisted"
+fi
+grep -q '^- manage_routines$' "${SCREENER_AGENT_MD}" || fail "Routine allowlist patch did not apply"
+
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
 mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
@@ -572,6 +817,21 @@ fi
 chown "${CONDOR_USER}:${CONDOR_USER}" "${CONDOR_CFG}"
 chmod 600 "${CONDOR_CFG}"
 
+# Fase 2.0: preserve an existing model route + key on rerun. Before this,
+# every rerun rewrote condor/.env to the HCNSEC default and emptied
+# OPENAI_API_KEY (observed at the Fase 1.9 execution), forcing a manual
+# restore of the route and key. Now: keep AGENT_KEY / MODEL_BASE_URL /
+# OPENAI_API_KEY when the file already sets them non-empty; otherwise
+# write the defaults below. Values are never echoed or logged.
+_EXISTING_AGENT_KEY=""
+_EXISTING_MODEL_BASE_URL=""
+_EXISTING_OPENAI_API_KEY=""
+if [ -f "${INSTALL_ROOT}/condor/.env" ]; then
+    _EXISTING_AGENT_KEY=$(grep -E '^AGENT_KEY=' "${INSTALL_ROOT}/condor/.env" | cut -d= -f2- || true)
+    _EXISTING_MODEL_BASE_URL=$(grep -E '^MODEL_BASE_URL=' "${INSTALL_ROOT}/condor/.env" | cut -d= -f2- || true)
+    _EXISTING_OPENAI_API_KEY=$(grep -E '^OPENAI_API_KEY=' "${INSTALL_ROOT}/condor/.env" | cut -d= -f2- || true)
+fi
+
 {
     echo "ADMIN_USER_ID=${ADMIN_ID}"
     echo "USE_TAILSCALE=false"
@@ -581,9 +841,9 @@ chmod 600 "${CONDOR_CFG}"
     echo "PAPER_MODE=true"
     echo "LIVE_TRADING_CONFIRMED=no"
     echo "CONDOR_ADMIN_USERNAME=${CONDOR_ADMIN_USERNAME:-admin}"
-    echo "AGENT_KEY=openai:MiniMax-M3.1-Flash"
-    echo "MODEL_BASE_URL=https://api.hcnsec.cn/v1"
-    echo "OPENAI_API_KEY="
+    echo "AGENT_KEY=${_EXISTING_AGENT_KEY:-openai:MiniMax-M3.1-Flash}"
+    echo "MODEL_BASE_URL=${_EXISTING_MODEL_BASE_URL:-https://api.hcnsec.cn/v1}"
+    echo "OPENAI_API_KEY=${_EXISTING_OPENAI_API_KEY:-}"
 } > "${INSTALL_ROOT}/condor/.env"
 chown "${CONDOR_USER}:${CONDOR_USER}" "${INSTALL_ROOT}/condor/.env"
 chmod 600 "${INSTALL_ROOT}/condor/.env"
