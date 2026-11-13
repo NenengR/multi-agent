@@ -950,6 +950,78 @@ fi
 grep -q 'isinstance(e, asyncio.TimeoutError)' "${SCAN_UNIVERSE_PY}" || fail "Routine timeout retry patch did not apply"
 python3 -m py_compile "${SCAN_UNIVERSE_PY}" || fail "scan_universe.py does not compile after patch"
 
+# ── 2j. Order book: initialize the trading pair before reading it ──
+# Fase 2.3, 14 Nov 2026. In the Fase 2.2 chain re-test the sentiment
+# analyst's order-book reads failed HTTP 500 for all five pairs, while
+# prices and funding on the same connector worked. Root cause (verified
+# against the pinned sources, not guessed): Condor's MCP get_order_book
+# calls POST /market-data/order-book on the local Hummingbot API without
+# first initializing the trading pair. The hb-api order-book path needs
+# the connector's _trading_rules populated (via start_network() ->
+# _update_trading_rules()), and that only happens through the
+# trading-pair/add path; without it _format_size_to_amount raises
+# KeyError '<PAIR>' and the router returns 500. Prices and funding work
+# because they never touch _trading_rules.
+#   Fix: in get_order_book, await client.market_data.add_trading_pair(
+#   connector_name, trading_pair, timeout=30) before the snapshot/query
+#   branches. Verified: add_trading_pair exists on the pinned
+#   hummingbot-api-client 1.5.3 (routers/market_data.py, POSTs to
+#   /market-data/trading-pair/add) and the pinned hb-api server
+#   (7ae108f) returns immediately for an already-initialized pair
+#   (initialize_order_book fast-path: pair in tracker.order_books with
+#   bids+asks -> True), so the extra call is a cheap no-op on repeat
+#   reads. Idempotent, fail-closed, same rule as the other steps.
+msg "2j/8. Initializing trading pair before order-book fetch..."
+if grep -q "Subscribe the pair to the connector's order book tracker before reading it." "${CANDLES_PY}"; then
+    msg "  market_data.py order-book init already present, patch skipped"
+else
+    python3 - "${CANDLES_PY}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# Marker first: the new block below ENDS with the old block verbatim
+# (the add call is inserted before it), so without this check a rerun
+# would match the old block again and duplicate the add call. The
+# shell guard above already skips, this is the second layer, and it
+# mirrors the draft patch script (same marker, same message).
+MARKER = "Subscribe the pair to the connector's order book tracker before reading it."
+if MARKER in src:
+    print("already applied, no change")
+    sys.exit(0)
+# NOTE: every old block below ends with a TRAILING NEWLINE (the closing
+# quotes sit on their own line). That pins the end of the match: a plain
+# substring check would also match a file where the last changed line
+# merely has extra text appended to it, and the patch would then
+# "succeed" on a corrupted file. The trailing newline makes that fail.
+old_order_book = '''    if query_type == "snapshot":
+        # Get full order book snapshot
+        order_book = await client.market_data.get_order_book(
+'''
+new_order_book = '''    # Subscribe the pair to the connector's order book tracker before reading it.
+    # POST /market-data/order-book alone returns HTTP 500 when the pair was never
+    # initialized: the Gate.io data source converts contract sizes through
+    # _trading_rules, which are only populated by start_network(), and start_network()
+    # only runs from the trading-pair/add (initialize) path. add_trading_pair is
+    # idempotent: already-subscribed pairs return immediately.
+    await client.market_data.add_trading_pair(
+        connector_name=connector_name, trading_pair=trading_pair, timeout=30
+    )
+
+    if query_type == "snapshot":
+        # Get full order book snapshot
+        order_book = await client.market_data.get_order_book(
+'''
+if old_order_book not in src:
+    print("FAIL market_data.py does not contain the expected get_order_book block, do not guess a different patch, report this", file=sys.stderr)
+    sys.exit(1)
+open(path, "w").write(src.replace(old_order_book, new_order_book, 1))
+print("patched")
+PYEOF
+    msg "  market_data.py patched: trading pair initialized before order-book fetch"
+fi
+grep -q "Subscribe the pair to the connector's order book tracker before reading it." "${CANDLES_PY}" || fail "Order-book init patch did not apply"
+python3 -m py_compile "${CANDLES_PY}" || fail "market_data.py does not compile after patch"
+
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
 mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
