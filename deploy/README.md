@@ -55,18 +55,19 @@ deploy/
 ```bash
 # On a fresh Ubuntu 22.04 VPS as a sudo user:
 sudo apt-get install -y git
-git clone https://github.com/NenengR/condor.git ~/condor-deploy
+git clone https://github.com/NenengR/multi-agent ~/condor-deploy
 cd ~/condor-deploy
 # (This single repo is the deployment manifest. The subprojects — condor,
 #  hummingbot-api — are cloned automatically by install-condor.sh, not as
 #  submodules, so a shallow clone is sufficient.)
-cp deploy/vps/env.example /etc/condor/secrets.env
-sudo install -m 600 -o root -g root /dev/null /etc/condor/secrets.env  # touch only
-sudo bash -c "EDITOR=nano edit /etc/condor/secrets.env"  # fill TELEGRAM_TOKEN, *_API_KEY, HCNSEC keys, etc.
+sudo install -d -m 755 /etc/condor
+sudo cp deploy/vps/env.example /etc/condor/secrets.env
+sudo chmod 600 /etc/condor/secrets.env
+sudo nano /etc/condor/secrets.env  # fill TELEGRAM_TOKEN, *_API_KEY, HCNSEC keys, PAPER_MODE, and separate passwords
 
-cp ~/condor-deploy/config.yml.example /home/condor/condor/config.yml
+cp ~/condor-deploy/config.yml.example /home/condor/condor-deploy/condor/config.yml
 # (after the install script creates the condor user)
-# Edit /home/condor/condor/config.yml to set admin_id and web_jwt_secret (openssl rand -base64 32)
+# Edit /home/condor/condor-deploy/condor/config.yml to set admin_id and web_jwt_secret (openssl rand -base64 32)
 
 sudo bash deploy/vps/install-condor.sh
 ```
@@ -83,8 +84,8 @@ After install you'll see:
 Verify:
 
 ```bash
-curl -H "Authorization: Bearer $(/home/condor/.local/bin/uv run --directory /home/condor/condor \
-    python -c "import sys; sys.path.insert(0, '/home/condor/condor'); from condor.web.auth import create_jwt; print(create_jwt(user_id=${ADMIN_USER_ID}, username='heliosneo', role='admin'))")" \
+curl -H "Authorization: Bearer $(/home/condor/.local/bin/uv run --directory /home/condor/condor-deploy/condor \
+    python -c "import sys; sys.path.insert(0, '/home/condor/condor-deploy/condor'); from condor.web.auth import create_jwt; print(create_jwt(user_id=${ADMIN_USER_ID}, username='${CONDOR_ADMIN_USERNAME:-admin}', role='admin'))")" \
     http://127.0.0.1:8088/api/v1/pipeline/health | jq .
 ```
 

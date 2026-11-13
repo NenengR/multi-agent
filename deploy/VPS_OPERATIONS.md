@@ -61,7 +61,7 @@ journalctl -u condor-infra -f
 docker logs -f hummingbot-api
 
 # Agent-level logs (execution_agent example)
-tail -f ~/condor-deploy/condor/agents/execution_agent/store/*/audit.log
+tail -f /home/condor/condor-deploy/condor/agents/execution_agent/store/*/audit.log
 ```
 
 ---
@@ -81,7 +81,7 @@ Required secrets for agent ticks:
 
 JWT secret (web dashboard sessions) lives in `condor/config.yml`:
 ```bash
-sudo -u condor nano ~/condor-deploy/condor/config.yml  # update web_jwt_secret
+sudo -u condor nano /home/condor/condor-deploy/condor/config.yml  # update web_jwt_secret
 sudo systemctl restart condor-main
 ```
 
@@ -90,7 +90,7 @@ sudo systemctl restart condor-main
 ## Update / redeploy
 
 ```bash
-cd ~/condor-deploy
+cd /home/condor/condor-deploy
 
 # Pull latest deployment manifest
 git pull
@@ -103,7 +103,7 @@ cd condor/frontend && npm install --omit=dev && npm run build && cd ../..
 sudo rm -rf condor/frontend/node_modules
 
 # Sync Python deps
-sudo -u condor bash -c '. ~/.local/bin/env && cd ~/condor-deploy/condor && uv sync'
+sudo -u condor bash -c '. ~/.local/bin/env && cd /home/condor/condor-deploy/condor && uv sync'
 
 # Restart
 sudo systemctl restart condor-infra condor-main
@@ -154,7 +154,7 @@ docker system prune -f    # remove stopped containers + dangling images
 ```bash
 # Kill all claude-agent-acp and MCP server processes
 pkill -f "claude-agent-acp" || true
-pkill -f "mcp_server"       || true
+pkill -f "mcp_servers"       || true
 sudo systemctl restart condor-main
 ```
 
@@ -176,7 +176,7 @@ sudo systemctl restart condor-main
 # On a fresh Ubuntu 22.04 VPS:
 sudo apt-get install -y git
 git clone <repo-url> ~/condor-deploy
-cd ~/condor-deploy
+cd /home/condor/condor-deploy
 sudo mkdir -p /etc/condor
 sudo cp deploy/vps/env.example /etc/condor/secrets.env
 sudo chmod 600 /etc/condor/secrets.env

@@ -9,7 +9,7 @@
 #   sudo bash deploy/vps/install-condor.sh
 #
 # Required before this script runs:
-#   1. Clone the repo:  cd ~ && git clone https://github.com/NenengR/condor.git
+#   1. Clone the repo:  cd ~ && git clone https://github.com/NenengR/multi-agent
 #   2. Create dir:      sudo mkdir -p /etc/condor
 #   3. Copy template:   sudo cp deploy/vps/env.example /etc/condor/secrets.env
 #   4. Edit secrets:    sudo nano /etc/condor/secrets.env   (fill all key fields)
@@ -29,6 +29,16 @@ msg()   { echo "${LOG_PREFIX} $*"; }
 warn()  { echo "${LOG_PREFIX} ⚠ $*"; }
 fail()  { echo "${LOG_PREFIX} ✗ $*" >&2; exit 1; }
 
+# ── Fase 1 pinned versions ───────────────────────────────────────────────
+# Read from versions.lock in this repo when present, else use the values below.
+CONDOR_COMMIT="${CONDOR_COMMIT:-8ced9726d18bb5d0a439d190c89aa51c80419503}"
+HUMMINGBOT_API_COMMIT="${HUMMINGBOT_API_COMMIT:-7ae108f11bf20651682dbdff639a8717068c5883}"
+
+require_nonempty() {
+    local name="$1" val="$2"
+    [ -n "${val}" ] || fail "Missing required secret: ${name} is empty"
+}
+
 # ── Pre-flight checks ────────────────────────────────────────────────────
 [ "$EUID" -eq 0 ] || fail "Re-run with sudo:  sudo bash $0"
 [ -d "${INSTALL_ROOT}/.git" ] || [ -d "${INSTALL_ROOT}/.git_bak" ] || [ -d "${INSTALL_ROOT}/install-condor.sh" ] || \
@@ -47,6 +57,24 @@ grep -q '^ANTHROPIC_API_KEY_HCNSEC=[^[:space:]]' "${SECRETS_FILE}" \
     || fail "ANTHROPIC_API_KEY_HCNSEC is empty — agents use claude-code:hcnsec and will not tick"
 grep -q '^ANTHROPIC_BASE_URL_HCNSEC=[^[:space:]]' "${SECRETS_FILE}" \
     || fail "ANTHROPIC_BASE_URL_HCNSEC is empty — agents use claude-code:hcnsec and will not tick"
+. "${SECRETS_FILE}"
+require_nonempty ADMIN_USER_ID "${ADMIN_USER_ID:-}"
+[ "${ADMIN_USER_ID}" != "0" ] || fail "ADMIN_USER_ID must not be 0"
+require_nonempty HB_API_USERNAME "${HB_API_USERNAME:-}"
+require_nonempty HB_API_PASSWORD "${HB_API_PASSWORD:-}"
+require_nonempty CONFIG_PASSWORD "${CONFIG_PASSWORD:-}"
+require_nonempty GATEWAY_PASSPHRASE "${GATEWAY_PASSPHRASE:-}"
+require_nonempty BROKER_USERNAME "${BROKER_USERNAME:-}"
+require_nonempty BROKER_PASSWORD "${BROKER_PASSWORD:-}"
+require_nonempty POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}"
+require_nonempty EMQX_DASHBOARD_PASSWORD "${EMQX_DASHBOARD_PASSWORD:-}"
+require_nonempty TAILSCALE_AUTH_KEY "${TAILSCALE_AUTH_KEY:-}"
+require_nonempty PAPER_MODE "${PAPER_MODE:-}"
+require_nonempty CONDOR_ADMIN_USERNAME "${CONDOR_ADMIN_USERNAME:-}"
+# Separate secrets check: API password, config password, and gateway passphrase must differ.
+[ "${HB_API_PASSWORD}" != "${CONFIG_PASSWORD}" ] || fail "CONFIG_PASSWORD must differ from HB_API_PASSWORD"
+[ "${HB_API_PASSWORD}" != "${GATEWAY_PASSPHRASE}" ] || fail "GATEWAY_PASSPHRASE must differ from HB_API_PASSWORD"
+[ "${CONFIG_PASSWORD}" != "${GATEWAY_PASSPHRASE}" ] || fail "GATEWAY_PASSPHRASE must differ from CONFIG_PASSWORD"
 
 msg "Install root:  ${INSTALL_ROOT}"
 msg "Secrets file:  ${SECRETS_FILE}"
@@ -126,9 +154,17 @@ msg "2a/9. Cloning condor + hummingbot-api..."
 sudo -u "${CONDOR_USER}" HOME="${CONDOR_HOME}" bash <<CLONESUBCMD
 set -e
 cd "${DEPLOY_DIR}"
-[ -d "condor" ]    || git clone --depth 50 --branch deploy/pipeline-customizations https://github.com/NenengR/condor.git condor
-[ -d "hummingbot-api" ] || git clone --depth 50 https://github.com/hummingbot/hummingbot-api.git hummingbot-api
+[ -d "condor" ]    || git clone --branch deploy/pipeline-customizations https://github.com/NenengR/condor.git condor
+[ -d "condor" ]    || fail "condor clone failed"
+(cd condor && git checkout "${CONDOR_COMMIT}" && [ "$(git rev-parse HEAD)" = "${CONDOR_COMMIT}" ] || fail "condor HEAD does not match pinned CONDOR_COMMIT")
+[ -d "hummingbot-api" ] || git clone https://github.com/hummingbot/hummingbot-api.git hummingbot-api
+[ -d "hummingbot-api" ] || fail "hummingbot-api clone failed"
+(cd hummingbot-api && git checkout "${HUMMINGBOT_API_COMMIT}" && [ "$(git rev-parse HEAD)" = "${HUMMINGBOT_API_COMMIT}" ] || fail "hummingbot-api HEAD does not match pinned HUMMINGBOT_API_COMMIT")
 CLONESUBCMD
+
+# Fase 1: verify pinned HEAD even when the subproject dir already existed.
+(cd condor && git checkout "${CONDOR_COMMIT}" && [ "$(git rev-parse HEAD)" = "${CONDOR_COMMIT}" ]) || fail "condor HEAD does not match pinned CONDOR_COMMIT"
+(cd hummingbot-api && git checkout "${HUMMINGBOT_API_COMMIT}" && [ "$(git rev-parse HEAD)" = "${HUMMINGBOT_API_COMMIT}" ]) || fail "hummingbot-api HEAD does not match pinned HUMMINGBOT_API_COMMIT"
 
 # ── 3. Tailscale ─────────────────────────────────────────────────────────
 msg "3/9. Tailscale mesh..."
@@ -158,14 +194,14 @@ mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
 chown -R 1000:1000 /opt/condor/data/broker
 COMPOSE_DIR=/opt/condor/compose
 mkdir -p "${COMPOSE_DIR}"
-cat >"${COMPOSE_DIR}/docker-compose.yml" <<'EOFCOMPOSE'
+cat >"${COMPOSE_DIR}/docker-compose.yml" <<EOFCOMPOSE
 services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_DB: hummingbot_api
       POSTGRES_USER: hbot
-      POSTGRES_PASSWORD: hummingbot-api
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - /opt/condor/data/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -179,7 +215,7 @@ services:
   broker:
     image: emqx:5
     environment:
-      EMQX_DASHBOARD__DEFAULT_PASSWORD: changeme123
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASSWORD}
     volumes:
       - /opt/condor/data/broker:/opt/emqx/data
     healthcheck:
@@ -220,15 +256,15 @@ HB_ENV="${INSTALL_ROOT}/hummingbot-api/.env"
 cat >"${HB_ENV}" <<EOF
 USERNAME=${HB_API_USERNAME}
 PASSWORD=${HB_API_PASSWORD}
-CONFIG_PASSWORD=${HB_API_PASSWORD}
+CONFIG_PASSWORD=${CONFIG_PASSWORD}
 DEBUG_MODE=false
 BROKER_HOST=localhost
 BROKER_PORT=1883
-BROKER_USERNAME=\${BROKER_USERNAME}
-BROKER_PASSWORD=\${BROKER_PASSWORD}
-DATABASE_URL=postgresql+asyncpg://hbot:hummingbot-api@localhost:5432/hummingbot_api
-GATEWAY_URL=http://localhost:15888
-GATEWAY_PASSPHRASE=\${HB_API_PASSWORD}
+BROKER_USERNAME=${BROKER_USERNAME}
+BROKER_PASSWORD=${BROKER_PASSWORD}
+DATABASE_URL=postgresql+asyncpg://hbot:${POSTGRES_PASSWORD}@localhost:5432/hummingbot_api
+GATEWAY_URL=https://localhost:15888
+GATEWAY_PASSPHRASE=${GATEWAY_PASSPHRASE}
 BOTS_PATH=${INSTALL_ROOT}/hummingbot-api
 TAILSCALE_ENABLED=true
 TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY}
@@ -302,6 +338,9 @@ chmod 600 "${CONDOR_CFG}"
     echo "DEPLOY_HUMMINGBOT_API=true"
     echo "WEB_PORT=${WEB_PORT:-8088}"
     echo "WEB_URL=${WEB_URL:-http://localhost:8088}"
+    echo "PAPER_MODE=${PAPER_MODE:-true}"
+    echo "LIVE_TRADING_CONFIRMED=${LIVE_TRADING_CONFIRMED:-no}"
+    echo "CONDOR_ADMIN_USERNAME=${CONDOR_ADMIN_USERNAME:-admin}"
     echo "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}"
     echo "ANTHROPIC_MODEL=${ANTHROPIC_MODEL}"
     echo "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
@@ -309,8 +348,10 @@ chmod 600 "${CONDOR_CFG}"
     echo "ANTHROPIC_BASE_URL_AGENTROUTER=${ANTHROPIC_BASE_URL}"
     echo "ANTHROPIC_MODEL_AGENTROUTER=${ANTHROPIC_MODEL}"
     for i in 1 2 3 4 5; do
-        key=$(eval echo "$"ANTHROPIC_API_KEY_AGENTROUTER_${i})
-        note=$(eval echo "$"ANTHROPIC_API_KEY_AGENTROUTER_${i}_NOTE)
+        _k="ANTHROPIC_API_KEY_AGENTROUTER_${i}"
+        _n="ANTHROPIC_API_KEY_AGENTROUTER_${i}_NOTE"
+        key="${!_k:-}"
+        note="${!_n:-}"
         if [ -n "${key}" ]; then
             echo "ANTHROPIC_API_KEY_AGENTROUTER_${i}=${key}"
             echo "ANTHROPIC_API_KEY_AGENTROUTER_${i}_NOTE=${note}"

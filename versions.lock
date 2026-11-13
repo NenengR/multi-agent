@@ -1,0 +1,16 @@
+# Fase 1, pinned versions, verified 12 Nov 2026.
+# Do not change these hashes without a review. Installer must verify HEAD after clone.
+CONDOR_REPO=https://github.com/NenengR/condor.git
+CONDOR_BRANCH=deploy/pipeline-customizations
+CONDOR_COMMIT=8ced9726d18bb5d0a439d190c89aa51c80419503
+CONDOR_COMMIT_DATE=2026-07-26T22:25:11+07:00
+CONDOR_COMMIT_MSG=Fix: hcnsec model routing, stop passing ANTHROPIC_MODEL=MiniMax-M3
+HUMMINGBOT_API_REPO=https://github.com/hummingbot/hummingbot-api.git
+HUMMINGBOT_API_BRANCH=main
+HUMMINGBOT_API_COMMIT=7ae108f11bf20651682dbdff639a8717068c5883
+HUMMINGBOT_API_COMMIT_DATE=2026-10-15T14:01:44-0300
+HUMMINGBOT_API_VERSION_PY=1.0.1
+MULTI_AGENT_BASE_COMMIT=e3751c08f8b3f21a24fc8b7e218eebeb9186de23
+POSTGRES_IMAGE=postgres:16
+EMQX_IMAGE=emqx:5
+NODE_MAJOR=22
