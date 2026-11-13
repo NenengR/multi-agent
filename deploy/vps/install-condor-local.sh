@@ -119,6 +119,41 @@
 #     still checks /health or does not check GET /. A claim of
 #     "installed" is now verified, not assumed.
 #
+# Fase 1.9, 13 Nov 2026. Built after HAMID's ACP diagnosis (08:25-08:40 WIB,
+# prompted by Pakle: "kadang problem dari pengaturan ACP nya, coba kamu cek
+# apalagi sekarang pakai nya OPENAI bukan Claude Code"):
+#   - Tick never used OpenAI: market_screener agent_key resolves to
+#     claude-code:hcnsec from agents/market_screener/AGENT.md (strategy
+#     frontmatter agent_key null, POST start only sends execution_mode).
+#     No code in the Condor repo reads AGENT_KEY or MODEL_BASE_URL from
+#     the environment (repo-wide grep: 0 matches), so every model change
+#     in condor/.env (HCNSEC, then FortyTwo) changed nothing the tick
+#     ran. The engine took the Claude ACP path; ACPClient.start() sends
+#     the initialize + session/new handshake through send_request, which
+#     waits on a future with NO timeout (the engine's 600s timeout only
+#     wraps the prompt stream, not start()). The claude-agent-acp
+#     subprocess gets no HCNSEC credentials either: resolve_acp maps
+#     them from ANTHROPIC_API_KEY_HCNSEC and ANTHROPIC_BASE_URL_HCNSEC,
+#     which this installer never sets. Result: the tick hangs forever,
+#     RUNNING, tick_count=0, no error. Same on both providers.
+#   - OpenAI path key is a dummy: _build_model passes a hardcoded
+#     api_key="not-needed" for openai+base_url (lines 380 and 391 at the
+#     pinned commit), never OPENAI_API_KEY from the environment, so a
+#     routed tick would 401 against HCNSEC/FortyTwo/Apinex.
+#   Fix, step 2c: patch ONLY the openai+custom-base_url branch in
+#   condor/acp/pydantic_ai_client.py so it reads OPENAI_API_KEY from
+#   the environment and raises a clear RuntimeError when it is empty.
+#   The ollama/lmstudio branch keeps "not-needed" on purpose. The patch
+#   is idempotent (skip when already patched, fail when the exact
+#   unpatched block is not found) and the file is py_compile-checked.
+#   The tick itself is then directed to the OpenAI path by passing
+#   agent_key and model_base_url in the start POST config (the engine
+#   reads config agent_key first), e.g. agent_key
+#   openai:nvidia/nemotron-3.5-super-vl:free with model_base_url
+#   https://api.fortytwo.network/v1 for the FortyTwo test. No change to
+#   the Claude ACP path: it stays unused until a provider mapping for
+#   it is deliberately set up.
+#
 # Usage:
 #   sudo bash deploy/vps/install-condor-local.sh
 #
@@ -332,6 +367,69 @@ fi
 grep -qF '"127.0.0.1"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" || fail "Hummingbot API Dockerfile loopback patch did not apply"
 grep -qF '"0.0.0.0"' "${DEPLOY_DIR}/hummingbot-api/Dockerfile" && fail "Hummingbot API Dockerfile still contains 0.0.0.0 after patch" || true
 msg "  both listeners on 127.0.0.1 and verified"
+
+# ── 2c. OpenAI API key: patch pydantic_ai_client.py to read OPENAI_API_KEY ─
+# Fase 1.9, 13 Nov 2026. Built after HAMID's ACP diagnosis (08:25-08:40 WIB):
+#   - The market_screener tick never used OpenAI at all. Its agent_key
+#     resolves to claude-code:hcnsec from agents/market_screener/AGENT.md,
+#     because no code in the Condor repo reads AGENT_KEY or
+#     MODEL_BASE_URL from the environment (repo-wide grep: 0 matches).
+#     So every model change in condor/.env (HCNSEC, then FortyTwo)
+#     changed nothing the tick actually ran. The engine took the Claude
+#     ACP path, spawned claude-agent-acp, and its handshake has no
+#     timeout, so the tick hung forever: RUNNING, tick_count=0, no
+#     error. Same symptom on both providers (HCNSEC 27 min, FortyTwo
+#     15 min).
+#   - Even routed to the OpenAI path, the tick would fail: _build_model
+#     passes a hardcoded api_key="not-needed" for openai+base_url
+#     (lines 380 and 391 at the pinned commit), never OPENAI_API_KEY
+#     from the environment, so HCNSEC/FortyTwo/Apinex would answer 401.
+#   Fix: patch ONLY the openai+custom-base_url branch below so it reads
+#   OPENAI_API_KEY from the environment and fails loudly when it is
+#   empty. The ollama/lmstudio branch keeps "not-needed" on purpose:
+#   local inference servers ignore the key.
+#   Idempotent (same rule as 2b): skip when already patched, fail only
+#   when the exact unpatched block is not found. Never guess a patch.
+msg "2c/8. Patching OpenAI API key handling (pydantic_ai_client.py)..."
+PYDANTIC_CLIENT="${DEPLOY_DIR}/condor/condor/acp/pydantic_ai_client.py"
+if grep -q 'OPENAI_API_KEY is not set' "${PYDANTIC_CLIENT}"; then
+    msg "  pydantic_ai_client.py already patched, patch skipped"
+else
+    python3 - "${PYDANTIC_CLIENT}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = '''        # OpenAI with custom base_url (vLLM, TGI, etc.)
+        if prefix == "openai" and base_url:
+            openai_client = AsyncOpenAI(
+                base_url=base_url,
+                api_key="not-needed",
+                timeout=_local_timeout,
+            )
+'''
+new = '''        # OpenAI with custom base_url (vLLM, TGI, etc.)
+        if prefix == "openai" and base_url:
+            _openai_key = os.environ.get("OPENAI_API_KEY")
+            if not _openai_key:
+                raise RuntimeError(
+                    "OPENAI_API_KEY is not set. Add it to your .env to use openai:* models with a custom base_url."
+                )
+            openai_client = AsyncOpenAI(
+                base_url=base_url,
+                api_key=_openai_key,
+                timeout=_local_timeout,
+            )
+'''
+if old not in src:
+    print("FAIL pydantic_ai_client.py does not contain the expected openai+base_url block, do not guess a different patch, report this", file=sys.stderr)
+    sys.exit(1)
+open(path, "w").write(src.replace(old, new, 1))
+print("patched")
+PYEOF
+    msg "  pydantic_ai_client.py patched to read OPENAI_API_KEY from env"
+fi
+grep -q 'OPENAI_API_KEY is not set' "${PYDANTIC_CLIENT}" || fail "OpenAI API key patch did not apply"
+python3 -m py_compile "${PYDANTIC_CLIENT}" || fail "pydantic_ai_client.py does not compile after patch"
 
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
