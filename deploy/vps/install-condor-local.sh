@@ -676,6 +676,149 @@ PYEOF
 fi
 grep -q '^- manage_routines$' "${SCREENER_AGENT_MD}" || fail "Routine allowlist patch did not apply"
 
+# ── 2g. Routine auth: scan_universe must use the Condor server config ──
+# Fase 2.1, 13 Nov 2026. The e6 tick proved the routine is reachable but
+# its prices call 401s against the LOCAL Hummingbot API: "Incorrect
+# username or password" at http://localhost:8000/market-data/prices.
+# Root cause, verified from the pinned code: the routine builds its own
+# HummingbotAPIClient from get_settings(), which reads
+# ~/.hummingbot_mcp/server.yml or the HUMMINGBOT_* env vars and falls back
+# to admin/admin when both are absent. The working MCP path is launched
+# with explicit --username/--password from config.yml servers.local (the
+# generated local credentials). The condor-web process has neither the
+# server.yml nor the env vars, so the routine sent admin/admin and got 401.
+# The "exchange may be rate-limiting" message the agent received is generic
+# and wrong; the code only retries on 429, so the 401 stopped after 1 attempt.
+#   Fix: _get_client() reads the server 'local' credentials from the
+#   ConfigManager (the same source the MCP launch uses), falling back to
+#   get_settings() only when the server entry is missing. The error text now
+#   reports the actual last failure instead of the generic rate-limit line.
+#   No password from Pakle is needed: this uses the credentials already on
+#   the Cue machine. (Pakle noted his old setup used username ciungwanara
+#   with a password to be shared later via a secure form; that is NOT used
+#   here, it stays as background context.)
+#   Idempotent (same rule as 2b/2c/2d/2e/2f): skip when already patched,
+#   fail only when the exact unpatched block is not found. Never guess.
+msg "2g/8. Fixing routine Hummingbot auth (scan_universe.py)..."
+SCAN_UNIVERSE_PY="${DEPLOY_DIR}/condor/agents/market_screener/routines/scan_universe.py"
+if grep -q 'get_config_manager().get_server("local")' "${SCAN_UNIVERSE_PY}"; then
+    msg "  scan_universe.py already patched, patch skipped"
+else
+    python3 - "${SCAN_UNIVERSE_PY}" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+# NOTE: every old block below ends with a TRAILING NEWLINE (the closing
+# quotes sit on their own line). That pins the end of the match: a plain
+# substring check would also match a file where the last changed line
+# merely has extra text appended to it; the trailing newline makes that
+# fail instead of patching a corrupted file.
+old_client = '''async def _get_client():
+    """Create a fresh HummingbotAPIClient from persisted server config."""
+    from hummingbot_api_client import HummingbotAPIClient
+    from mcp_servers.hummingbot_api.settings import get_settings
+
+    s = get_settings()
+    client = HummingbotAPIClient(
+        base_url=s.api_url,
+        username=s.api_username,
+        password=s.api_password,
+        timeout=s.client_timeout,
+    )
+    await client.init()
+    return client
+'''
+new_client = '''async def _get_client():
+    """Create a fresh HummingbotAPIClient from the Condor server config."""
+    from hummingbot_api_client import HummingbotAPIClient
+    from mcp_servers.hummingbot_api.settings import get_settings
+
+    s = get_settings()
+    # Fase 2.1: the MCP server is launched with --username/--password from
+    # config.yml servers.local, but this routine read get_settings() instead,
+    # which falls back to admin/admin when ~/.hummingbot_mcp/server.yml and
+    # the HUMMINGBOT_* env vars are absent. That 401'd against the local
+    # Hummingbot API. Use the same source as the MCP launch.
+    try:
+        from config_manager import get_config_manager
+
+        server = get_config_manager().get_server("local")
+    except Exception:
+        server = None
+    if server:
+        base_url = f"http://{server.get('host', 'localhost')}:{server.get('port', 8000)}"
+        username = server.get("username") or s.api_username
+        password = server.get("password") or s.api_password
+    else:
+        base_url = s.api_url
+        username = s.api_username
+        password = s.api_password
+    client = HummingbotAPIClient(
+        base_url=base_url,
+        username=username,
+        password=password,
+        timeout=s.client_timeout,
+    )
+    await client.init()
+    return client
+'''
+old_prices = '''    # --- 1. Batch prices (with retry for 429) ---
+    prices: dict = {}
+    for attempt in range(3):
+        try:
+            prices_resp = await client.market_data.get_prices(connector, universe)
+            if isinstance(prices_resp, dict):
+                prices = prices_resp.get("prices", prices_resp)
+            elif isinstance(prices_resp, list):
+                # list of {pair, price} dicts
+                prices = {p.get("trading_pair", p.get("pair", "")): p.get("price") for p in prices_resp}
+            break
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            logger.warning(f"Batch prices failed (attempt {attempt+1}): {e}")
+            break
+
+    if not prices:
+        return RoutineResult(text="⚠️ Could not fetch prices — exchange may be rate-limiting.")
+'''
+new_prices = '''    # --- 1. Batch prices (with retry for 429) ---
+    prices: dict = {}
+    last_error = "no attempt made"
+    for attempt in range(3):
+        try:
+            prices_resp = await client.market_data.get_prices(connector, universe)
+            if isinstance(prices_resp, dict):
+                prices = prices_resp.get("prices", prices_resp)
+            elif isinstance(prices_resp, list):
+                # list of {pair, price} dicts
+                prices = {p.get("trading_pair", p.get("pair", "")): p.get("price") for p in prices_resp}
+            break
+        except Exception as e:
+            last_error = str(e)
+            if "429" in str(e) and attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            logger.warning(f"Batch prices failed (attempt {attempt+1}): {e}")
+            break
+
+    if not prices:
+        return RoutineResult(text=f"⚠️ Could not fetch prices — last error: {last_error}")
+'''
+for label, old, new in (("client", old_client, new_client), ("prices", old_prices, new_prices)):
+    if old not in src:
+        print(f"FAIL scan_universe.py does not contain the expected {label} block, do not guess a different patch, report this", file=sys.stderr)
+        sys.exit(1)
+    src = src.replace(old, new, 1)
+open(path, "w").write(src)
+print("patched")
+PYEOF
+    msg "  scan_universe.py patched: routine auth from server config"
+fi
+grep -q 'get_config_manager().get_server("local")' "${SCAN_UNIVERSE_PY}" || fail "Routine auth patch did not apply"
+python3 -m py_compile "${SCAN_UNIVERSE_PY}" || fail "scan_universe.py does not compile after patch"
+
 # ── 3. Postgres + EMQX broker via docker compose ────────────────────────
 msg "3/8. Postgres + EMQX broker (localhost only)..."
 mkdir -p /opt/condor/data/postgres /opt/condor/data/broker
